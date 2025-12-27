@@ -39,3 +39,8 @@
 
 # debug information files
 *.dwo
+*libtorch
+*.vscode
+*ViZDoom
+*artifacts
+*build

@@ -1,0 +1,22 @@
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 150
+
+AlignConsecutiveAssignments:
+  Enabled: true
+  AcrossEmptyLines: false
+  AcrossComments: false
+
+BinPackParameters: false
+BinPackArguments: false
+AlignAfterOpenBracket: Align
+ContinuationIndentWidth: 4
+
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterFunction: true
+
+
+PointerAlignment: Left
+ReferenceAlignment: Left
+UseTab: Never
