@@ -312,9 +312,9 @@ class PPO {
 
         // Ensure no gradient escapes
         advantages = advantages.detach();
-        std::cout << "Advantages: " << advantages << std::endl;
+        // std::cout << "Advantages: " << advantages << std::endl;
         returns = returns.detach();
-        std::cout << "returns: " << returns << std::endl;
+        // std::cout << "returns: " << returns << std::endl;
 
         auto value_error = (returns - values).pow(2).mean();
 
@@ -339,6 +339,8 @@ class PPO {
             auto [action, log_prob, entropy] = policy_net->get_actions(state);
             auto [next_state, reward, done]  = env.step(action.squeeze(0));
             auto value                       = value_net->forward(state).flatten();
+
+            reward *= 0.01; // reward scaling
 
             // Add transition to buffer
             trajectory_buffer.add(state.squeeze(0),
