@@ -19,13 +19,13 @@ class TrajectoryBuffer {
     int64_t capacity_;
     size_t position_ = 0;
 
-    torch::Tensor states_      = torch::empty({0});
-    torch::Tensor actions_     = torch::empty({0});
-    torch::Tensor rewards_     = torch::empty({0});
-    torch::Tensor next_states_ = torch::empty({0});
-    torch::Tensor dones_       = torch::empty({0});
-    torch::Tensor log_probs_   = torch::empty({0});
-    torch::Tensor values_      = torch::empty({0});
+    torch::Tensor states_;
+    torch::Tensor actions_;
+    torch::Tensor rewards_;
+    torch::Tensor next_states_;
+    torch::Tensor dones_;
+    torch::Tensor log_probs_;
+    torch::Tensor values_;
 
   public:
     TrajectoryBuffer(size_t capacity) : capacity_(capacity) {}
@@ -38,23 +38,29 @@ class TrajectoryBuffer {
              const torch::Tensor& done,
              const torch::Tensor& value)
     {
+        //     std::cout << "Actions : " << action.sizes() << "\nLog Probs : " << log_prob.sizes() << std::endl;
+        //     std::cout << "States : " << state.sizes() << "\nNext States : " << next_state.sizes() << std::endl;
+        //     std::cout << "Rewards : " << reward.sizes() << "\nDones : " << done.sizes() << "\nValues : " << value.sizes() << std::endl;
+
         if (!states_.defined() || states_.numel() == 0) {
             states_      = allocate_with_capacity_like(state, capacity_);
             next_states_ = allocate_with_capacity_like(next_state, capacity_);
             actions_     = allocate_with_capacity_like(action, capacity_);
             log_probs_   = allocate_with_capacity_like(log_prob, capacity_);
 
-            rewards_ = torch::empty({static_cast<int64_t>(capacity_)}, reward.options());
-            dones_   = torch::empty({static_cast<int64_t>(capacity_)}, done.options());
-            values_  = torch::empty({static_cast<int64_t>(capacity_)}, value.options());
+            rewards_ = torch::empty({static_cast<int64_t>(capacity_), 1}, reward.options());
+            dones_   = torch::empty({static_cast<int64_t>(capacity_), 1}, done.options());
+            values_  = torch::empty({static_cast<int64_t>(capacity_), 1}, value.options());
         }
+
         states_[position_]      = state;
         actions_[position_]     = action;
         log_probs_[position_]   = log_prob;
         rewards_[position_]     = reward;
         next_states_[position_] = next_state;
         dones_[position_]       = done;
-        values_[position_]      = value;
+
+        values_[position_] = value;
 
         position_ = (position_ + 1) % capacity_;
     };

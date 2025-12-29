@@ -17,6 +17,8 @@ class Env {
 class DoomENV : public Env {
   private:
     std::unique_ptr<vizdoom::DoomGame> game_;
+    vizdoom::GameStatePtr prev_state_;
+    double prev_reward_;
 
   public:
     DoomENV(bool visible = false)
@@ -50,12 +52,24 @@ class DoomENV : public Env {
         game_->setScreenFormat(vizdoom::RGB24);
 
         game_->setWindowVisible(visible);
+
+        game_->addAvailableButton(vizdoom::MOVE_LEFT);
+        game_->addAvailableButton(vizdoom::MOVE_RIGHT);
+        game_->addAvailableButton(vizdoom::ATTACK);
+
+        // Adds game variables that will be included in state.
+        game_->addAvailableGameVariable(vizdoom::AMMO2); // Causes episodes to finish after 200 tics (actions)
+        game_->setEpisodeTimeout(200);
+
+        // Makes episodes start after 10 tics (~after raising the weapon)
+        game_->setEpisodeStartTime(10);
+
         game_->init();
     };
 
     torch::Tensor reset() override
     {
-        game_->close();
+        // game_->close();
         game_->newEpisode();
         vizdoom::GameStatePtr state = game_->getState();
         torch::Tensor screen_tensor =
@@ -70,17 +84,33 @@ class DoomENV : public Env {
     {
         std::vector<double> action_vector(action.data_ptr<float>(), action.data_ptr<float>() + action.numel());
 
-        double reward               = game_->makeAction(action_vector);
-        vizdoom::GameStatePtr state = game_->getState();
-        torch::Tensor screen_tensor =
-            torch::from_blob(state->screenBuffer->data(), {1, game_->getScreenHeight(), game_->getScreenHeight(), 3}, torch::kUInt8)
-                .permute({0, 3, 1, 2})
-                .to(torch::kFloat32);
+        double reward = game_->makeAction(action_vector);
+        bool done     = game_->isEpisodeFinished();
 
-        screen_tensor /= 255.0;
+        // Get the current state if not done
+        vizdoom::GameStatePtr state = nullptr;
+        if (!done) {
+            state = game_->getState();
+        }
 
-        bool done = game_->isEpisodeFinished();
-        return {screen_tensor, reward, done};
+        // Create observation tensor
+        torch::Tensor obs_tensor;
+        if (state) {
+            obs_tensor = torch::from_blob(state->screenBuffer->data(), {1, game_->getScreenHeight(), game_->getScreenHeight(), 3}, torch::kUInt8)
+                             .permute({0, 3, 1, 2})
+                             .to(torch::kFloat32) /
+                         255.0;
+        } else {
+            // If done, produce a zero state or your chosen terminal state representation
+            obs_tensor = torch::zeros({1, 3, game_->getScreenHeight(), game_->getScreenHeight()}, torch::kFloat32);
+        }
+
+        // If the episode ended, reset the environment for next time
+        if (done) {
+            game_->newEpisode();
+        }
+
+        return {obs_tensor, reward, done};
     }
 
     std::tuple<size_t, size_t, size_t> get_observation_size() const override
@@ -95,42 +125,45 @@ class DoomENV : public Env {
 
     void play(bool random_act = false)
     {
-        game_->newEpisode();
-        while (!game_->isEpisodeFinished()) {
+        for (int i = 0; i < 10; ++i) {
 
-            vizdoom::GameStatePtr state = game_->getState();
+            std::cout << "Episode #" << i + 1 << "\n";
+            game_->newEpisode();
+            while (!game_->isEpisodeFinished()) {
 
-            std::vector<double> action(game_->getAvailableButtonsSize());
-            // Set your action.
+                vizdoom::GameStatePtr state = game_->getState();
 
-            if (random_act) {
-                for (size_t i = 0; i < action.size(); ++i) {
-                    action[i] = rand() % 2;
+                std::vector<double> action(game_->getAvailableButtonsSize());
+                // Set your action.
+
+                if (random_act) {
+                    for (size_t i = 0; i < action.size(); ++i) {
+                        action[i] = rand() % 2;
+                    }
+                } else {
+                    action[0] = 1;
+                    // Example:
+                    // pressing the first button
                 }
-            } else {
-                action[0] = 1;
-                // Example:
-                // pressing the first button
-            }
 
-            game_->makeAction(action);
-
-            if (random_act) {
-                std::cout << "Performing random action!" << action << std::endl;
                 game_->makeAction(action);
-            }
 
-            if (game_->isPlayerDead()) {
-                // Check if player is dead
-                game_->respawnPlayer();
-                // Use this to respawn immediately after death, new state will be available.
-            }
+                if (random_act) {
+                    std::cout << "Performing random action!" << action << std::endl;
+                    game_->makeAction(action);
+                }
 
-            std::cout << game_->getEpisodeTime() << " Frags: " << game_->getGameVariable(vizdoom::FRAGCOUNT) << std::endl;
+                if (game_->isPlayerDead()) {
+                    // Check if player is dead
+                    game_->respawnPlayer();
+                    // Use this to respawn immediately after death, new state will be available.
+                }
+
+                std::cout << game_->getEpisodeTime() << " Frags: " << game_->getGameVariable(vizdoom::FRAGCOUNT) << std::endl;
+            }
         }
-
         game_->close();
-        game_.release();
+        // game_.release();
     }
 
     ~DoomENV() override

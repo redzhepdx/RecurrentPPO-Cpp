@@ -1,5 +1,6 @@
 #pragma once
 
+#include <networks.hpp>>
 #include <torch/torch.h>
 
 struct CNNValueNetworkImpl : torch::nn::Module {
@@ -8,18 +9,17 @@ struct CNNValueNetworkImpl : torch::nn::Module {
     {
         seq_cnn = register_module(
             "seq_cnn",
-            torch::nn::Sequential(
-                torch::nn::Conv2d(
-                    torch::nn::Conv2dOptions(std::get<0>(obs_size), 32, 8).stride(4).bias(false)),
-                torch::nn::ReLU(),
-                torch::nn::Conv2d(torch::nn::Conv2dOptions(32, 64, 4).stride(2).bias(false)),
-                torch::nn::ReLU(),
-                torch::nn::Flatten()));
+            torch::nn::Sequential(layer_init(torch::nn::Conv2d(torch::nn::Conv2dOptions(std::get<0>(obs_size), 32, 8).stride(4).bias(false))),
+                                  torch::nn::ReLU(),
+                                  layer_init(torch::nn::Conv2d(torch::nn::Conv2dOptions(32, 64, 4).stride(2).bias(false))),
+                                  torch::nn::ReLU(),
+                                  layer_init(torch::nn::Conv2d(torch::nn::Conv2dOptions(64, 128, 2).stride(2).bias(false))),
+                                  torch::nn::ReLU()));
+
         seq_linear = register_module(
             "seq_linear",
-            torch::nn::Sequential(torch::nn::Linear(64 * 9 * 9, 512), // Stole from atari for now!
-                                  torch::nn::Tanh(),
-                                  torch::nn::Linear(512, 1)));
+            torch::nn::Sequential(
+                torch::nn::Flatten(), layer_init(torch::nn::Linear(128 * 6 * 6, 512)), torch::nn::Tanh(), layer_init(torch::nn::Linear(512, 1))));
     }
 
     torch::Tensor forward(torch::Tensor x)
