@@ -1,17 +1,16 @@
 #pragma once
 
 #include <cmath>
-
 #include <torch/torch.h>
 
 #include "distributions.hpp"
 #include "networks.hpp"
 
-struct CNNPolicyNetworkImpl : torch::nn::Module {
+struct CNNActorCriticNetworkImpl : torch::nn::Module {
 
-    CNNPolicyNetworkImpl() = default;
+    CNNActorCriticNetworkImpl() = default;
 
-    CNNPolicyNetworkImpl(std::tuple<size_t, size_t, size_t> obs_size, size_t action_dim)
+    CNNActorCriticNetworkImpl(std::tuple<size_t, size_t, size_t> obs_size, size_t action_dim)
     {
         seq_cnn = register_module(
             "seq_cnn",
@@ -26,12 +25,16 @@ struct CNNPolicyNetworkImpl : torch::nn::Module {
         auto dummy     = torch::zeros({1, (int64_t)std::get<0>(obs_size), (int64_t)std::get<1>(obs_size), (int64_t)std::get<2>(obs_size)});
         auto n_flatten = seq_cnn->forward(dummy).numel();
 
-        seq_linear = register_module("seq_linear",
-                                     torch::nn::Sequential(torch::nn::Flatten(),
-                                                           layer_init(torch::nn::Linear(n_flatten, 512)),
-                                                           torch::nn::Tanh(),
-                                                           layer_init(torch::nn::Linear(512, action_dim))));
-        //    torch::nn::Tanh()));
+        seq_actor = register_module("seq_actor",
+                                    torch::nn::Sequential(torch::nn::Flatten(),
+                                                          layer_init(torch::nn::Linear(n_flatten, 512)),
+                                                          torch::nn::Tanh(),
+                                                          layer_init(torch::nn::Linear(512, action_dim))));
+
+        seq_value = register_module(
+            "seq_value",
+            torch::nn::Sequential(
+                torch::nn::Flatten(), layer_init(torch::nn::Linear(n_flatten, 512)), torch::nn::Tanh(), layer_init(torch::nn::Linear(512, 1))));
 
         // nn.Parameter equivalent
         actor_log_std = register_parameter("actor_log_std", torch::full({static_cast<long long>(action_dim)}, -3.0));
@@ -40,12 +43,20 @@ struct CNNPolicyNetworkImpl : torch::nn::Module {
     torch::Tensor forward(torch::Tensor x)
     {
         auto cnn_features = seq_cnn->forward(x);
-        return seq_linear->forward(cnn_features);
+        return seq_actor->forward(cnn_features);
     }
 
-    std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> get_actions(torch::Tensor x, c10::optional<torch::Tensor> action_opt = c10::nullopt)
+    torch::Tensor get_value(torch::Tensor x)
     {
-        auto action_means = forward(x);
+        auto cnn_features = seq_cnn->forward(x);
+        return seq_value->forward(cnn_features);
+    }
+
+    std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> get_actions(torch::Tensor x,
+                                                                                       c10::optional<torch::Tensor> action_opt = c10::nullopt)
+    {
+        auto cnn_features = seq_cnn->forward(x);
+        auto action_means = seq_actor->forward(cnn_features);
 
         // auto log_std_param = torch::clamp(actor_log_std, -2.0, 2.0);
         // auto log_std       = log_std_param.expand_as(action_means);
@@ -58,23 +69,24 @@ struct CNNPolicyNetworkImpl : torch::nn::Module {
         torch::Tensor action_out;
         if (action_opt.has_value()) {
             // action_out = action_opt.value().squeeze(1);
-            action_out = action_opt.value();
+            action_out = action_opt.value(); //.unsqueeze(0);
         } else {
             // action_out = dist.sample(x.size(0));
             action_out = dist.sample();
         }
-        // std::cout << action_out.sizes() << std::endl;
-
         auto log_prob = dist.log_prob(action_out);
 
         auto entropy = dist.entropy();
 
-        return {action_out, log_prob, entropy};
+        auto value = seq_value->forward(cnn_features);
+
+        return {action_out, log_prob, entropy, value};
     }
 
-    torch::nn::Sequential seq_cnn    = nullptr;
-    torch::nn::Sequential seq_linear = nullptr;
+    torch::nn::Sequential seq_cnn   = nullptr;
+    torch::nn::Sequential seq_actor = nullptr;
+    torch::nn::Sequential seq_value = nullptr;
     torch::Tensor actor_log_std;
 };
 
-TORCH_MODULE(CNNPolicyNetwork);
+TORCH_MODULE(CNNActorCriticNetwork);

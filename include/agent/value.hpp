@@ -1,7 +1,8 @@
 #pragma once
 
-#include <networks.hpp>>
 #include <torch/torch.h>
+
+#include "networks.hpp"
 
 struct CNNValueNetworkImpl : torch::nn::Module {
     CNNValueNetworkImpl() = default;
@@ -16,10 +17,14 @@ struct CNNValueNetworkImpl : torch::nn::Module {
                                   layer_init(torch::nn::Conv2d(torch::nn::Conv2dOptions(64, 128, 2).stride(2).bias(false))),
                                   torch::nn::ReLU()));
 
+        // Calculate the features dynamically
+        auto dummy     = torch::zeros({1, (int64_t)std::get<0>(obs_size), (int64_t)std::get<1>(obs_size), (int64_t)std::get<2>(obs_size)});
+        auto n_flatten = seq_cnn->forward(dummy).numel();
+
         seq_linear = register_module(
             "seq_linear",
             torch::nn::Sequential(
-                torch::nn::Flatten(), layer_init(torch::nn::Linear(128 * 6 * 6, 512)), torch::nn::Tanh(), layer_init(torch::nn::Linear(512, 1))));
+                torch::nn::Flatten(), layer_init(torch::nn::Linear(n_flatten, 512)), torch::nn::Tanh(), layer_init(torch::nn::Linear(512, 1))));
     }
 
     torch::Tensor forward(torch::Tensor x)

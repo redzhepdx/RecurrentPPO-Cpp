@@ -1,75 +1,103 @@
 #pragma once
+
+#include "agent/a2c.hpp"
 #include "agent/policy.hpp"
 #include "agent/value.hpp"
 #include "buffer.hpp"
+#include "ds.hpp"
 #include "envs.hpp"
+
 #include <filesystem>
+#include <iostream>
 #include <memory>
 #include <torch/torch.h>
 #include <tuple>
 
-typedef struct {
-    size_t total_time_steps = 1000000; // total timesteps of the experiments
-    double learning_rate    = 3e-4;    // the learning rate of the optimizer
-    size_t num_envs         = 1;       // the number of parallel game environments. 1 for now!
-    size_t num_steps        = 2048;    // the number of steps to run in each environment per policy rollout
-    bool anneal_lr          = true;    // Toggle learning rate annealing for policy and value networks
-    double gamma            = 0.99;    // the discount factor gamma
-    double gae_lambda       = 0.95;    // the lambda for the general advantage estimation
-    size_t num_minibatches  = 32;      // the number of mini-batches
-    size_t ppo_epochs       = 10;      // the K epochs to update the policy
-    bool norm_adv           = true;    // Toggles advantages normalization
-    double clip_epsilon     = 0.2;     // the surrogate clipping coefficient
-    bool clip_vloss         = true;    // Toggles whether or not to use a clipped loss for the value function, as per the paper.
-    double ent_coef         = 0.0;     // coefficient of the entropy
-    double vf_coef          = 0.5;     // coefficient of the value function
-    double max_grad_norm    = 0.5;     // the maximum norm for the gradient clipping
-    double target_kl        = 0.02;    // the target KL divergence threshold
-
-    // size_t horizon_        = 64;
+typedef struct PPOParams {
+    size_t total_time_steps     = 1000000; // total timesteps of the experiments
+    double learning_rate_policy = 1e-4;    // the learning rate of the optimizer
+    double learning_rate_critic = 1e-5;    // the learning rate of the optimizer
+    double min_lr               = 1e-5;    // minumum value of learning rate
+    size_t num_envs             = 1;       // the number of parallel game environments. 1 for now!
+    size_t num_steps            = 2048;    // the number of steps to run in each environment per policy rollout
+    bool anneal_lr              = false;   // Toggle learning rate annealing for policy and value networks
+    double gamma                = 0.99;    // the discount factor gamma
+    double gae_lambda           = 0.95;    // the lambda for the general advantage estimation
+    size_t num_minibatches      = 32;      // the number of mini-batches
+    size_t ppo_epochs           = 10;      // the K epochs to update the policy
+    bool norm_adv               = true;    // Toggles advantages normalization
+    double clip_epsilon         = 0.2;     // the surrogate clipping coefficient
+    bool clip_vloss             = true;    // Toggles whether or not to use a clipped loss for the value function, as per the paper.
+    double ent_coef             = 0.0;     // coefficient of the entropy
+    double vf_coef              = 0.5;     // coefficient of the value function
+    double max_grad_norm        = 0.5;     // the maximum norm for the gradient clipping
+    double target_kl            = 0.02;    // the target KL divergence threshold
+    double reward_sharper       = 0.01;    // Reward scaling parameter
+    size_t grad_acc_steps       = 2;       // Gradient accumulation step counts
 } PPOParams;
 
 class PPO {
   private:
     PPOParams params_;
 
-    size_t batch_size_      = 0; // batch_size to be computed during runtime
-    size_t mini_batch_size_ = 0; // mini batch size to be computed during runtime
-    size_t num_iterations_  = 0; // number of iterations to be computed during runtime
-    size_t buffer_capacity_ = 2; // Size of the trajectory buffer
-    int64_t max_return_     = INT64_MIN;
+    size_t batch_size_                = 0; // batch_size to be computed during runtime
+    size_t mini_batch_size_           = 0; // mini batch size to be computed during runtime
+    size_t num_iterations_            = 0; // number of iterations to be computed during runtime
+    size_t buffer_capacity_           = 2; // Size of the trajectory buffer
+    double max_return_rollout_return_ = INT32_MIN;
+    double max_return_                = INT32_MIN;
+    size_t current_episode_           = 0;
+    size_t log_rate_                  = 1;
+    size_t track_last_n               = 10;
+    size_t best_checkpoint_episode    = 0;
+    size_t save_top_n                 = 5;
+    bool separate_nets                = false;
+
+    std::unique_ptr<CircularBuffer<double>> last_n_returns;
+    std::unique_ptr<CircularBuffer<size_t>> saved_checkpoints;
 
     std::tuple<size_t, size_t, size_t> obs_size_;
 
     CNNPolicyNetwork policy_net;
     CNNValueNetwork value_net;
+    CNNActorCriticNetwork actor_critic_net;
 
     std::unique_ptr<torch::optim::Adam> policy_optimizer;
     std::unique_ptr<torch::optim::Adam> value_optimizer;
+    std::unique_ptr<torch::optim::Adam> a2c_optimizer;
 
     std::unique_ptr<ReplayBuffer> buffer;
 
     torch::Tensor batch_indices_;
 
   public:
-    PPO(std::tuple<size_t, size_t, size_t> obs_size, int action_size, PPOParams params) : params_(params), obs_size_(obs_size)
+    PPO(std::tuple<size_t, size_t, size_t> obs_size, int action_size, PPOParams params, bool separate_nets)
+        : params_(params), obs_size_(obs_size), separate_nets(separate_nets)
     {
+        if (separate_nets) {
+            policy_net = CNNPolicyNetwork(obs_size, action_size);
+            value_net  = CNNValueNetwork(obs_size);
 
-        policy_net = CNNPolicyNetwork(obs_size, action_size);
-        value_net  = CNNValueNetwork(obs_size);
+            policy_optimizer =
+                std::make_unique<torch::optim::Adam>(policy_net->parameters(), torch::optim::AdamOptions(params_.learning_rate_policy));
+            value_optimizer = std::make_unique<torch::optim::Adam>(value_net->parameters(), torch::optim::AdamOptions(params_.learning_rate_critic));
 
-        policy_optimizer = std::make_unique<torch::optim::Adam>(policy_net->parameters(), torch::optim::AdamOptions(params_.learning_rate));
-
-        value_optimizer = std::make_unique<torch::optim::Adam>(value_net->parameters(), torch::optim::AdamOptions(params_.learning_rate));
+        } else {
+            actor_critic_net = CNNActorCriticNetwork(obs_size, action_size);
+            a2c_optimizer =
+                std::make_unique<torch::optim::Adam>(actor_critic_net->parameters(), torch::optim::AdamOptions(params_.learning_rate_policy));
+        }
 
         batch_size_      = params_.num_envs * params_.num_steps;
         mini_batch_size_ = batch_size_ / params_.num_minibatches;
+        batch_indices_   = torch::arange((int64_t)batch_size_);
 
         buffer = std::make_unique<ReplayBuffer>(buffer_capacity_);
 
-        batch_indices_ = torch::arange((int64_t)batch_size_);
+        load_networks("artifacts");
 
-        load_networks("artifacts/");
+        last_n_returns    = std::make_unique<CircularBuffer<double>>(track_last_n);
+        saved_checkpoints = std::make_unique<CircularBuffer<size_t>>(save_top_n);
     };
 
     void store_trajectory(const TrajectoryBuffer& trajectory) { buffer->add_trajectory(trajectory); }
@@ -79,7 +107,6 @@ class PPO {
     std::tuple<double, double> calculate_clip_fraction(torch::Tensor& log_ratio, torch::Tensor& ratio)
     {
         torch::NoGradGuard no_grad;
-        // auto old_approx_kl = (-log_ratio).mean();
 
         auto approx_kl = ((ratio - 1) - log_ratio).mean();
 
@@ -97,38 +124,69 @@ class PPO {
     void save_networks(const std::string& folder_path)
     {
         std::filesystem::create_directories(folder_path);
+        if (separate_nets) {
+            {
+                torch::serialize::OutputArchive policy_archive;
+                policy_net->save(policy_archive);
+                policy_archive.save_to(folder_path + "/policy_" + std::to_string(best_checkpoint_episode) + ".pt");
+            }
 
-        {
-            torch::serialize::OutputArchive policy_archive;
-            policy_net->save(policy_archive);
-            policy_archive.save_to(folder_path + "/policy.pt");
+            {
+                torch::serialize::OutputArchive value_archive;
+                value_net->save(value_archive);
+                value_archive.save_to(folder_path + "/value_" + std::to_string(best_checkpoint_episode) + ".pt");
+            }
+        } else {
+            {
+                torch::serialize::OutputArchive a2c_archive;
+                actor_critic_net->save(a2c_archive);
+                a2c_archive.save_to(folder_path + "/a2c_" + std::to_string(best_checkpoint_episode) + ".pt");
+            }
         }
 
-        {
-            torch::serialize::OutputArchive value_archive;
-            value_net->save(value_archive);
-            value_archive.save_to(folder_path + "/value.pt");
+        if (current_episode_ % log_rate_ == 0) {
+            std::cout << "\033[31m>>>>>>>>>>>Saved networks to: " << folder_path << std::endl;
         }
-
-        std::cout << "\033[31m>>>>>>>>>>>Saved networks to: " << folder_path << std::endl;
     }
 
     void load_networks(const std::string& folder_path)
     {
-        if (!std::filesystem::exists(folder_path + "/policy.pt") || !std::filesystem::exists(folder_path + "/value.pt")) {
+        if (!std::filesystem::exists(folder_path)) {
             std::cout << "\033[31m>>>>>>>>>>>No saved networks found at " << folder_path << std::endl;
             return;
         }
 
-        torch::serialize::InputArchive policy_archive;
-        policy_archive.load_from(folder_path + "/policy.pt");
-        policy_net->load(policy_archive);
+        if (!std::filesystem::is_directory(folder_path)) {
+            std::cout << "\033[31m>>>>>>>>>>>Directory check failed for " << folder_path << std::endl;
+            return;
+        }
+        int64_t last_epoch = -1;
+        for (const auto& entry : std::filesystem::directory_iterator(folder_path)) {
+            // Only include regular files
+            if (entry.is_regular_file()) {
+                std::string file_path   = entry.path().filename().string();
+                std::string episode_str = split(file_path, "_")[1];
+                episode_str             = split(episode_str, ".")[0];
+                int64_t episode_id      = std::stoi(episode_str);
+                last_epoch              = std::max(last_epoch, episode_id);
+            }
+        }
 
-        torch::serialize::InputArchive value_archive;
-        value_archive.load_from(folder_path + "/value.pt");
-        value_net->load(value_archive);
+        if (separate_nets) {
+            torch::serialize::InputArchive policy_archive;
+            policy_archive.load_from(folder_path + "/policy_" + std::to_string(last_epoch) + ".pt");
+            policy_net->load(policy_archive);
 
-        std::cout << "\033[31m>>>>>>>>>>>Loaded policy & value networks from: " << folder_path << std::endl;
+            torch::serialize::InputArchive value_archive;
+            value_archive.load_from(folder_path + "/value_" + std::to_string(last_epoch) + ".pt");
+            value_net->load(value_archive);
+        } else {
+            torch::serialize::InputArchive a2c_archive;
+            a2c_archive.load_from(folder_path + "/a2c_" + std::to_string(last_epoch) + ".pt");
+            actor_critic_net->load(a2c_archive);
+        }
+
+        std::cout << "\033[31m>>>>>>>>>>>Loaded policy & value networks from: " << folder_path << "\nLoaded epoch index :" << last_epoch << std::endl;
     }
 
     void print_tensor(torch::Tensor& t)
@@ -137,6 +195,26 @@ class PPO {
             std::cout << t[i] << " ";
         }
         std::cout << std::endl;
+    }
+
+    void remove_old_checkpoints(const std::string& folder_path)
+    {
+        if (!saved_checkpoints->is_full()) {
+            return;
+        }
+
+        size_t first_checkpoint_index = saved_checkpoints->pop_first();
+        for (auto& path : {"policy", "value"}) {
+            std::filesystem::path model_path = folder_path + "/" + path + "_" + std::to_string(first_checkpoint_index) + ".pt";
+            try {
+                bool removed = std::filesystem::remove(model_path);
+                if (!removed) {
+                    std::cout << "Something went wrong while removing " << model_path << std::endl;
+                }
+            } catch (const std::filesystem::filesystem_error& e) {
+                std::cerr << "Error deleting file: " << e.what() << "\n";
+            }
+        }
     }
 
     void optimize(const TrajectoryBuffer& tb, torch::Tensor& advantages, torch::Tensor& returns)
@@ -151,27 +229,37 @@ class PPO {
 
         size_t channel, width, height;
         std::tie(channel, width, height) = obs_size_;
+
         // Perform PPO optimization step
-        auto states      = tb.get_states();
-        auto actions     = tb.get_actions();
-        auto rewards     = tb.get_rewards();
-        auto dones       = tb.get_dones();
-        auto next_states = tb.get_next_states();
+        auto states      = tb.get_states();                // [B, C, H, W]
+        auto actions     = tb.get_actions();               // [B, num_actions]
+        auto rewards     = tb.get_rewards().squeeze(-1);   // [B]
+        auto dones       = tb.get_dones().squeeze(-1);     // [B]
+        auto next_states = tb.get_next_states();           // [B, C, H, W]
+        auto log_probs   = tb.get_log_probs().squeeze(-1); // [B]
+        auto values      = tb.get_values().squeeze(-1);    // [B]
 
-        auto log_probs = tb.get_log_probs();
-        auto values    = tb.get_values();
-
-        std::cout << "\033[31m>>>>>>>>>>>[ADV] mean=" << advantages.mean().item<double>() << " std=" << advantages.std().item<double>() << std::endl;
+        if (current_episode_ % log_rate_ == 0) {
+            std::cout << "\033[31m>>>>>>>>>>>[ADV] mean=" << advantages.mean().item<double>() << " std=" << advantages.std().item<double>()
+                      << std::endl;
+        }
 
         // Normalize advantages
-        auto norm_advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8);
-
-        // TODO probably reshape the states
+        // auto norm_advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8);
+        torch::Tensor used_advantages = advantages;
+        if (params_.norm_adv) {
+            used_advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8);
+        }
 
         std::vector<double> clip_fractions;
-        auto b_indices = batch_indices_.clone();
-        for (size_t epoch = 0; epoch < params_.ppo_epochs; ++epoch) {
+        auto b_indices    = batch_indices_.clone();
+        uint64_t steps    = 0;
+        bool stop_updates = false;
 
+        for (size_t epoch = 0; epoch < params_.ppo_epochs; ++epoch) {
+            if (current_episode_ % log_rate_ == 0) {
+                std::cout << "\033[37m>>>>>>>>>>>[PPO EPOCH] " << epoch + 1 << "/" << params_.ppo_epochs << std::endl;
+            }
             // Generate a random permutation of indices
             auto perm = torch::randperm(b_indices.size(0));
 
@@ -182,67 +270,120 @@ class PPO {
                 auto end                = start + mini_batch_size_;
                 auto mini_batch_indices = b_indices.slice(0, start, end);
 
-                auto mb_states     = states.index({mini_batch_indices}).detach();
-                auto mb_action     = actions.index({mini_batch_indices}).detach();
-                auto mb_values     = values.index({mini_batch_indices}).detach();
-                auto mb_returns    = returns.index({mini_batch_indices}).detach();
-                auto mb_advantages = norm_advantages.index({mini_batch_indices}).detach();
-                auto mb_log_probs  = log_probs.index({mini_batch_indices}).detach();
+                auto mb_states     = states.index({mini_batch_indices}).detach();          // [MB, C, H, W]
+                auto mb_action     = actions.index({mini_batch_indices}).detach();         // [MB, num_actions]
+                auto mb_values     = values.index({mini_batch_indices}).detach();          // [MB]
+                auto mb_returns    = returns.index({mini_batch_indices}).detach();         // [MB]
+                auto mb_advantages = used_advantages.index({mini_batch_indices}).detach(); // [MB]
+                auto mb_log_probs  = log_probs.index({mini_batch_indices}).detach();       // [MB]
 
-                auto [new_action, new_log_prob, entropy] = policy_net->get_actions(mb_states, mb_action);
-                auto new_value                           = value_net->get_value(mb_states);
+                torch::Tensor new_action, new_log_prob, entropy, new_value;
+                if (separate_nets) {
+                    auto res = policy_net->get_actions(mb_states, mb_action);
 
-                auto log_ratio = new_log_prob - mb_log_probs;
+                    new_action   = std::get<0>(res);
+                    new_log_prob = std::get<1>(res);
+                    entropy      = std::get<2>(res);
 
-                auto ratio = log_ratio.exp();
+                    // Get value from value network
+                    new_value = value_net->get_value(mb_states); // [MB, 1]
+                } else {
+                    auto res = actor_critic_net->get_actions(mb_states, mb_action);
+
+                    new_action   = std::get<0>(res);
+                    new_log_prob = std::get<1>(res);
+                    entropy      = std::get<2>(res);
+
+                    // This is an actor critic network so it returns value too
+                    new_value = std::get<3>(res); // [MB, 1]
+                }
+
+                new_log_prob.squeeze_(-1); // [MB]
+                entropy.squeeze_(-1);      // [MB]
+                new_value.squeeze_(-1);    // [MB]
+
+                auto log_ratio = new_log_prob - mb_log_probs; // [MB]
+
+                auto ratio = log_ratio.exp(); // [MB]
+
+                if (epoch == 0 && start == 0) {
+                    auto lr_mean   = (new_log_prob - mb_log_probs).mean().item<double>();
+                    auto lr_std    = (new_log_prob - mb_log_probs).std().item<double>();
+                    auto ratio_min = ratio.min().item<double>();
+                    auto ratio_max = ratio.max().item<double>();
+
+                    std::cout << "31m>>>>>>>>>>>[DEBUG] log_ratio mean=" << lr_mean << " std=" << lr_std << " ratio min=" << ratio_min
+                              << " max=" << ratio_max << std::endl;
+
+                    std::cout << "31m>>>>>>>>>>>[DEBUG] mb_action dtype=" << mb_action.dtype() << " shape=" << mb_action.sizes()
+                              << " mb_log_probs shape=" << mb_log_probs.sizes() << " new_log_prob shape=" << new_log_prob.sizes() << std::endl;
+                }
 
                 auto [clip_frac, approx_kl] = calculate_clip_fraction(log_ratio, ratio);
                 clip_fractions.push_back(clip_frac);
 
                 // Policy gradient loss
-                auto policy_gradient_loss         = -mb_advantages * ratio;
-                auto policy_gradient_loss_clipped = -mb_advantages * torch::clamp(ratio, 1.0 - params_.clip_epsilon, 1.0 + params_.clip_epsilon);
+                auto policy_gradient_loss = mb_advantages * ratio; // [MB]
 
-                auto pg_loss = torch::max(policy_gradient_loss, policy_gradient_loss_clipped).mean();
+                auto policy_gradient_loss_clipped =
+                    mb_advantages * torch::clamp(ratio, 1.0 - params_.clip_epsilon, 1.0 + params_.clip_epsilon); // [MB]
 
-                // std::cout << "PG LOSS : " << pg_loss << "\npolicy_gradient_loss : " << policy_gradient_loss
-                //           << "\npolicy_gradient_loss_clipped : " << policy_gradient_loss_clipped << std::endl;
-                // std::cout << "mb_advantages : " << mb_advantages << " ratio : " << ratio << std::endl;
+                auto pg_loss = -torch::min(policy_gradient_loss, policy_gradient_loss_clipped).mean(); // [] single value
 
                 // Value loss
-                new_value = new_value.view(-1);
+                new_value = new_value.view(-1); // [MB]
+
                 torch::Tensor v_loss;
                 if (params_.clip_vloss) {
                     // clipped value prediction
-                    auto v_clipped = mb_values + torch::clamp(new_value - mb_values, -params_.clip_epsilon, params_.clip_epsilon);
+                    auto v_clipped = mb_values + torch::clamp(new_value - mb_values, -params_.clip_epsilon, params_.clip_epsilon); // [MB]
 
-                    auto v_loss_unclipped = torch::pow(new_value - mb_returns, 2);
-                    auto v_loss_clipped   = torch::pow(v_clipped - mb_returns, 2);
+                    auto v_loss_unclipped = torch::pow(new_value - mb_returns, 2); // [MB]
+
+                    auto v_loss_clipped = torch::pow(v_clipped - mb_returns, 2); // [MB]
 
                     // take the max
-                    auto v_loss_max = torch::max(v_loss_unclipped, v_loss_clipped);
-                    v_loss          = 0.5 * v_loss_max.mean();
+                    auto v_loss_max = torch::max(v_loss_unclipped, v_loss_clipped); // [MB]
+
+                    v_loss = 0.5 * v_loss_max.mean(); // []
+
                 } else {
+
                     auto v_loss_raw = torch::pow(new_value - mb_returns, 2);
                     v_loss          = 0.5 * v_loss_raw.mean();
                 }
 
-                auto entropy_loss = entropy.mean();
+                auto entropy_loss = -entropy.mean(); // []
 
                 auto loss_policy = pg_loss + entropy_loss * params_.ent_coef;
                 auto loss_value  = v_loss * params_.vf_coef;
                 auto total_loss  = loss_policy + loss_value;
 
-                value_optimizer->zero_grad();
-                policy_optimizer->zero_grad();
+                // Scale the total loss according to the gradient accumulation steps
+                if (params_.grad_acc_steps > 1) {
+                    total_loss = total_loss / (double)params_.grad_acc_steps;
+                }
 
                 total_loss.backward();
 
-                torch::nn::utils::clip_grad_norm_(policy_net->parameters(), params_.max_grad_norm);
-                torch::nn::utils::clip_grad_norm_(value_net->parameters(), params_.max_grad_norm);
+                steps++;
 
-                policy_optimizer->step();
-                value_optimizer->step();
+                if (steps % params_.grad_acc_steps == 0) {
+                    if (separate_nets) {
+                        torch::nn::utils::clip_grad_norm_(policy_net->parameters(), params_.max_grad_norm);
+                        torch::nn::utils::clip_grad_norm_(value_net->parameters(), params_.max_grad_norm);
+
+                        policy_optimizer->step();
+                        value_optimizer->step();
+
+                        value_optimizer->zero_grad();
+                        policy_optimizer->zero_grad();
+                    } else {
+                        torch::nn::utils::clip_grad_norm_(actor_critic_net->parameters(), params_.max_grad_norm);
+                        a2c_optimizer->step();
+                        a2c_optimizer->zero_grad();
+                    }
+                }
 
                 mean_pg_loss += pg_loss.item<double>();
                 mean_v_loss += v_loss.item<double>();
@@ -251,164 +392,233 @@ class PPO {
                 mean_clipfrac += clip_frac;
                 update_count++;
 
-                if (approx_kl > params_.target_kl) {
-                    std::cout << "\033[38m>>>>>>>>>>>[EARLY STOP]"
-                              << " kl=" << approx_kl << std::endl;
-                    break;
+                if (params_.target_kl > 0.0 && approx_kl > 1.5 * params_.target_kl) {
+                    if (current_episode_ % log_rate_ == 0) {
+                        std::cout << "\033[38m>>>>>>>>>>>[EARLY STOP] kl=" << approx_kl << std::endl;
+                    }
+                    stop_updates = true;
+                    break; // break minibatch loop
                 }
             }
-            std::cout << "\033[37m>>>>>>>>>>>[PPO UPDATE]"
-                      << " pg_loss=" << mean_pg_loss / update_count << " v_loss=" << mean_v_loss / update_count
-                      << " entropy=" << mean_entropy / update_count << " kl=" << mean_kl / update_count
-                      << " clip_frac=" << mean_clipfrac / update_count << std::endl;
-        }
 
-        // Publish some statistics
+            // If there is any remaining updates that hasn't been done, flush it here!
+            if (steps % params_.grad_acc_steps != 0) {
+                if (separate_nets) {
+                    torch::nn::utils::clip_grad_norm_(policy_net->parameters(), params_.max_grad_norm);
+                    torch::nn::utils::clip_grad_norm_(value_net->parameters(), params_.max_grad_norm);
+
+                    policy_optimizer->step();
+                    value_optimizer->step();
+
+                    policy_optimizer->zero_grad();
+                    value_optimizer->zero_grad();
+                } else {
+                    torch::nn::utils::clip_grad_norm_(actor_critic_net->parameters(), params_.max_grad_norm);
+                    a2c_optimizer->step();
+                    a2c_optimizer->zero_grad();
+                }
+            }
+
+            if (stop_updates) {
+                break;
+            }
+
+            if (current_episode_ % log_rate_ == 0) {
+                std::cout << "\033[37m>>>>>>>>>>>[PPO UPDATE]"
+                          << " pg_loss=" << mean_pg_loss / update_count << " v_loss=" << mean_v_loss / update_count
+                          << " entropy=" << mean_entropy / update_count << " kl=" << mean_kl / update_count
+                          << " clip_frac=" << mean_clipfrac / update_count << std::endl;
+            }
+        }
     }
 
     std::tuple<torch::Tensor, torch::Tensor> calculate_advantages_and_returns(const TrajectoryBuffer& tb)
     {
         torch::NoGradGuard no_grad;
 
-        auto states      = tb.get_states().detach();
-        auto actions     = tb.get_actions().detach();
-        auto rewards     = tb.get_rewards().detach();
-        auto dones       = tb.get_dones().detach();
-        auto next_states = tb.get_next_states().detach();
-        auto log_probs   = tb.get_log_probs().detach();
-        auto values      = tb.get_values().detach();
+        auto rewards     = tb.get_rewards().squeeze(-1); // [T]
+        auto dones       = tb.get_dones().squeeze(-1);   // [T]
+        auto values      = tb.get_values().squeeze(-1);  // [T]
+        auto next_states = tb.get_next_states();
 
-        auto next_values = value_net->get_value(next_states).detach();
-        auto advantages  = torch::zeros_like(next_values);
+        auto idx = next_states.size(0) - 1;
+        torch::Tensor next_value;
 
-        torch::Tensor last_gae = torch::zeros_like(values[0]);
-        torch::Tensor next_non_terminal;
-        torch::Tensor curr_next_value;
-
-        auto last_done       = dones[dones.size(0) - 1];
-        auto last_next_value = next_values[next_values.size(0) - 1];
-
-        for (int64_t t = params_.num_steps - 1; t >= 0; --t) {
-
-            if (t == params_.num_steps - 1) {
-                // Special scenario that I need to understand later
-                next_non_terminal = 1.0 - last_done;
-                curr_next_value   = last_next_value;
-            } else {
-                next_non_terminal = 1.0 - dones[t + 1];
-                curr_next_value   = values[t + 1];
-            }
-
-            // r + gamma * v'[t] * done - v[t]
-            // advantage[t] = delta + gamma * gae_lambda * done * last_gae
-            auto delta = rewards[t] + params_.gamma * curr_next_value * next_non_terminal - values[t];
-            // std::cout << "Delta at time " << t << " : " << delta << std::endl;
-            advantages[t] = delta + params_.gamma * params_.gae_lambda * next_non_terminal * last_gae;
-
-            last_gae = advantages[t];
+        if (separate_nets) {
+            next_value = value_net->get_value(next_states.index({idx}).unsqueeze(0)).detach().squeeze(-1); // [1]
+        } else {
+            next_value = actor_critic_net->get_value(next_states.index({idx}).unsqueeze(0)).detach().squeeze(-1); // [1]
         }
 
-        auto returns = advantages + values;
+        int64_t T = rewards.size(0);
 
-        // Ensure no gradient escapes
-        advantages = advantages.detach();
-        // std::cout << "Advantages: " << advantages << std::endl;
-        returns = returns.detach();
-        // std::cout << "returns: " << returns << std::endl;
+        torch::Tensor advantages = torch::zeros_like(values).unsqueeze(-1); // [T, 1]
+        torch::Tensor last_gae   = torch::zeros_like(values[0]);            // [], just a value
+
+        for (int64_t t = params_.num_steps - 1; t >= 0; --t) {
+            // mask = 0 if done, 1 if not (shape [1,1])
+            auto mask = 1.0 - dones[t]; // [T]
+
+            // next value: either bootstrap or the next in values
+            auto next_val = (t == T - 1 ? next_value : values[t + 1]); // [1]
+
+            // delta = r + γ * V(next) * mask - V(current)
+            auto delta = rewards[t] + params_.gamma * next_val * mask - values[t]; // [1]
+
+            // GAE recurrence
+            last_gae = delta + params_.gamma * params_.gae_lambda * mask * last_gae; // [1]
+
+            advantages[t] = last_gae;
+        }
+        advantages.squeeze_(-1);            // [T]
+        auto returns = advantages + values; // [T]
 
         auto value_error = (returns - values).pow(2).mean();
 
-        std::cout << "\033[31m>>>>>>>>>>>[VALUE] mse=" << value_error.item<double>() << std::endl;
+        if (current_episode_ % log_rate_ == 0) {
+            std::cout << "\033[31m>>>>>>>>>>>[VALUE] mse=" << value_error.item<double>() << std::endl;
+        }
 
-        return {advantages, returns};
+        return {advantages.detach(), returns.detach()};
     }
 
-    void collect(Env& env)
+    void collect(Env& env, size_t episode_index)
     {
         torch::NoGradGuard no_grad;
 
         TrajectoryBuffer trajectory_buffer(params_.num_steps);
 
-        auto state            = env.reset(); // reset returns initial state
-        double episode_return = 0.0;
-        size_t episode_length = 0;
+        auto state                       = env.reset(); // reset returns initial state
+        double episode_return            = 0.0;
+        size_t completed_episodes        = 0;
+        double completed_episode_returns = 0;
 
-        std::cout << "\033[32m>>>>>>>>>>> Collecting a trajectory from rollouts" << std::endl;
+        if (current_episode_ % log_rate_ == 0) {
+            std::cout << "\033[32m>>>>>>>>>>> Collecting a trajectory from rollouts" << std::endl;
+        }
 
         for (size_t t = 0; t < params_.num_steps; ++t) {
-            auto [action, log_prob, entropy] = policy_net->get_actions(state);
-            auto [next_state, reward, done]  = env.step(action.squeeze(0));
-            auto value                       = value_net->forward(state).flatten();
+            torch::Tensor action, log_prob, entropy, value;
+            if (separate_nets) {
+                auto res = policy_net->get_actions(state);
+                action   = std::get<0>(res);
+                log_prob = std::get<1>(res);
+                entropy  = std::get<2>(res);
+                value    = value_net->forward(state).flatten();
+            } else {
+                auto res = actor_critic_net->get_actions(state);
+                action   = std::get<0>(res);
+                log_prob = std::get<1>(res);
+                entropy  = std::get<2>(res);
+                value    = std::get<3>(res).flatten();
+            }
 
-            reward *= 0.01; // reward scaling
+            auto [next_state, reward, done] = env.step(action.squeeze(0));
+
+            auto tb_state      = state.squeeze(0);
+            auto tb_next_state = next_state.squeeze(0);
+
+            auto scaled_reward = reward * params_.reward_sharper; // reward scaling
+
+            auto reward_tensor = torch::full({(int64_t)params_.num_envs}, scaled_reward, state.options());
+            auto done_tensor   = torch::full({(int64_t)params_.num_envs}, done ? 1.0 : 0.0, state.options());
 
             // Add transition to buffer
-            trajectory_buffer.add(state.squeeze(0),
-                                  action,
-                                  log_prob,
-                                  torch::full({(int64_t)params_.num_envs}, reward, state.options()),
-                                  next_state.squeeze(0),
-                                  torch::full({(int64_t)params_.num_envs}, done ? 1.0 : 0.0, state.options()),
-                                  value);
+            trajectory_buffer.add(tb_state, action.squeeze(0), log_prob.squeeze(0), reward_tensor, tb_next_state, done_tensor, value);
 
             episode_return += reward;
-            episode_length++;
-
-            state = next_state;
 
             // If done: break early — end of episode
             if (done) {
-                break;
+                completed_episodes++;
+                completed_episode_returns += env.last_total_reward();
+                state = env.reset();
+            } else {
+                state = next_state;
             }
         }
 
         buffer->add_trajectory(trajectory_buffer);
 
+        last_n_returns->push(episode_return);
+
+        auto sum_of_last_n         = last_n_returns->sum();
+        max_return_rollout_return_ = std::max(max_return_rollout_return_, sum_of_last_n);
+
+        // Save networks
         if (episode_return > max_return_) {
+            best_checkpoint_episode = episode_index;
+            max_return_             = episode_return;
             save_networks("artifacts");
+
+            saved_checkpoints->push(episode_index);
+            remove_old_checkpoints("artifacts");
         }
 
-        std::cout << "\033[31m>>>>>>>>>>>[ROLL OUT] return=" << episode_return << " length=" << episode_length << std::endl;
+        if (current_episode_ % log_rate_ == 0) {
+            std::cout << "\033[31m>>>>>>>>>>>[ROLL OUT] return=" << episode_return << " sum_of_last_" << track_last_n << "=" << sum_of_last_n
+                      << "\nAVG Reward Per Episode : " << completed_episode_returns / (double)completed_episodes
+                      << "\nBest Period : " << max_return_rollout_return_ << " Best Run Result : " << max_return_ << std::endl;
+        }
     }
 
     void anneal_lr(size_t episode, size_t max_episodes)
     {
-        auto frac   = 1.0 - ((double)episode - 1.0) / max_episodes;
-        auto new_lr = frac * params_.learning_rate;
+        if (!params_.anneal_lr)
+            return;
 
-        std::cout << "\033[32m>>>>>>>>>>> Annealing the learning rate. Starting Value (LR) : " << params_.learning_rate
-                  << " - New Value (LR) : " << new_lr << std::endl;
+        auto frac   = 1.0 - ((double)episode - 1.0) / max_episodes;
+        auto new_lr = frac * params_.learning_rate_policy;
+        new_lr      = std::max(params_.min_lr, new_lr);
 
         // Update optimizers with new learning rate
-        for (auto& opt : {policy_optimizer.get(), value_optimizer.get()}) {
-            for (auto& group : opt->param_groups()) {
-                static_cast<torch::optim::AdamOptions&>(group.options()).lr(new_lr);
+        if (separate_nets) {
+            for (auto* opt : {policy_optimizer.get(), value_optimizer.get()}) {
+                if (!opt)
+                    continue;
+                for (auto& group : opt->param_groups()) {
+                    static_cast<torch::optim::AdamOptions&>(group.options()).lr(new_lr);
+                }
+            }
+        } else {
+            if (a2c_optimizer) {
+                for (auto& group : a2c_optimizer->param_groups()) {
+                    static_cast<torch::optim::AdamOptions&>(group.options()).lr(new_lr);
+                }
             }
         }
+
+        std::cout << "\033[32m>>>>>>>>>>> Annealing the learning rate. Starting Value (LR) : " << params_.learning_rate_policy
+                  << " - New Value (LR) : " << new_lr << std::endl;
     }
 
     torch::Tensor act(torch::Tensor& state)
     {
         // Get action from policy network
-        auto [action, log_prob, entropy] = policy_net->get_actions(state.unsqueeze(0));
-        return action.squeeze(0);
+        if (separate_nets) {
+            auto res = policy_net->get_actions(state);
+            return std::get<0>(res);
+        }
+
+        auto res = actor_critic_net->get_actions(state);
+        return std::get<0>(res);
     }
 
     void train(Env& env, size_t tb_count)
     {
         std::cout << "\033[32m>>>>>>>>>>> Training has started!" << std::endl;
         for (size_t episode = 0; episode < params_.total_time_steps; ++episode) {
-            std::cout << "\033[33m>>>>>>>>>>> Episode : " << episode + 1 << std::endl;
-            anneal_lr(episode, params_.total_time_steps);
-            collect(env);
+            if (current_episode_ % log_rate_ == 0) {
+                std::cout << "\033[33m>>>>>>>>>>> Episode : " << episode + 1 << std::endl;
+                anneal_lr(episode, params_.total_time_steps);
+            }
+
+            collect(env, episode);
 
             if (tb_count > 1) {
-                std::cout << "\033[34m>>>>>>>>>>> Sampling trajectories (N-TB) : " << tb_count << std::endl;
                 auto trajectories = buffer->sample_tbs(tb_count);
                 size_t tb_id      = 0;
                 for (const auto& tb_ref : trajectories) {
-                    std::cout << "\033[35m>>>>>>>>>>> Optimization Trajectory " << tb_id << std::endl;
-
                     const auto& tb             = tb_ref.get();
                     auto [advantages, returns] = calculate_advantages_and_returns(tb);
                     optimize(tb, advantages, returns);
@@ -416,16 +626,40 @@ class PPO {
                     tb_id++;
                 }
             } else {
-                std::cout << "\033[34m>>>>>>>>>>> Get Last Trajectory" << std::endl;
                 TrajectoryBuffer tb = buffer->get_last(); // For now only last
 
-                std::cout << "\033[34m>>>>>>>>>>> Calculate Advantages and Returns!" << std::endl;
                 auto [advantages, returns] = calculate_advantages_and_returns(tb);
 
-                std::cout << "\033[34m>>>>>>>>>>> Optimization Step!" << std::endl;
                 optimize(tb, advantages, returns);
             }
-            std::cout << "\033[35m------------------------------------ END OF AN EPISODE ------------------------------------ " << std::endl;
+
+            current_episode_++;
+
+            if (current_episode_ % log_rate_ == 0) {
+                std::cout << "\033[35m------------------------------------ END OF AN EPISODE ------------------------------------ " << std::endl;
+            }
+        }
+        std::cout << "Max Sum of Last " << track_last_n << " : " << max_return_ << std::endl;
+    }
+
+    void play(Env& env, size_t max_steps)
+    {
+        torch::NoGradGuard no_grad;
+
+        auto state = env.reset(); // reset returns initial state
+
+        std::cout << "\033[32m>>>>>>>>>>> Playing the trained agent!" << std::endl;
+
+        for (size_t t = 0; t < max_steps; ++t) {
+            auto action                     = act(state);
+            auto [next_state, reward, done] = env.step(action.squeeze(0));
+
+            state = next_state;
+
+            // If done: break early — end of episode
+            if (done) {
+                break;
+            }
         }
     }
 

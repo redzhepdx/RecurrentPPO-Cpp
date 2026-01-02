@@ -1,7 +1,8 @@
 #pragma once
 
-#include <torch/torch.h>
 #include <tuple>
+
+#include <torch/torch.h>
 
 static torch::Tensor allocate_with_capacity_like(const torch::Tensor& ref, size_t capacity)
 {

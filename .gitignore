@@ -41,6 +41,8 @@
 *.dwo
 *libtorch
 *.vscode
-*ViZDoom
+*ViZDoom*
 *artifacts
 *build
+*vizdoom_env_rl
+_vizdoom.ini
