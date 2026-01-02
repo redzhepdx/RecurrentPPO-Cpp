@@ -5,7 +5,7 @@ I feel like it will be messy but it is what it is I guess!.
 
 ##### Dependencies
 
-1. General dependencies
+## 1. General dependencies
 ```bash
 sudo apt-get install clang clang++ gcc g++ cmake boost sdl2 openal-soft
 ```
@@ -16,7 +16,7 @@ or
 brew install clang clang++ gcc g++ cmake boost sdl2 openal-soft
 ```
 
-1. `Libtorch 2.9.1`
+### 2. `Libtorch 2.9.1`
 
 Download and unzip in this project.
 
@@ -42,13 +42,31 @@ make -j$(sysctl -n hw.ncpu)
 cd ../..
 ```
 
-3. Build the entire repo
+## 3. Build the entire repo
 
 `DO NOT FORGET TO RUN THIS FROM THE MAIN FOLDER OF THE PROJECT.`
 ```bash
 mkdir build && cd build
 
 cmake -DCMAKE_BUILD_TYPE=Release .. && cmake --build . -v
+```
+
+## 4. Run training
+
+Maybe you should modify the `src/main.cpp` if you want to change the environment. Search for `train_ppo_run` function. Similar to StableBaselines.
+
+```
+./recurrent_ppo_cpp --operation train
+```
+
+It takes around 400-2000 episodes depending on the scenario. Start with simple.wad. It is default.
+
+## 4. Evaluate the trained agent
+
+#### IMPORTANT : If you changed something in `train_ppo_run` function related to the agent or environment, do the same changes in `play_doom_ai_run` otherwise you will use apples to squeeze orange juice and you will be very very sad.
+
+```
+./recurrent_ppo_cpp --operation play_ai
 ```
 
 #### VSCode Setup 
