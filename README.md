@@ -13,6 +13,7 @@ The sources I followed:
 1. Cleanrl : https://github.com/vwxyzjn/cleanrl/blob/master/cleanrl/ppo_atari_lstm.py#L310
 2. StableBaselines3 : https://github.com/DLR-RM/stable-baselines3/blob/master/stable_baselines3/ppo/ppo.py
 3. and SKRL for guidance and pseudo-code : https://skrl.readthedocs.io/en/latest/api/agents/ppo.html
+4. My dear colleague's old medium post : https://medium.com/@mihai.anca13/exploring-opengl-physx-and-pytorch-all-in-c-8d8308a89cc6
 
 
 ##### Dependencies
