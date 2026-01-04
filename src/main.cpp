@@ -1,6 +1,7 @@
 #include <iostream>
 #include <memory>
 #include <tuple>
+#include <unistd.h>
 #include <unordered_map>
 
 #include <torch/torch.h>
@@ -95,6 +96,8 @@ void play_doom_ai_run()
             reward_sum += reward;
             done_ = done;
             episode_length++;
+
+            usleep(100000);
         }
 
         std::cout << "Episode Length : " << episode_length << std::endl;
@@ -118,7 +121,7 @@ void train_ppo_rnn_run()
 
     int64_t stack_frames   = 1;
     int64_t skip_frames    = 4;
-    int64_t episode_length = 300;
+    int64_t episode_length = 2100; // 300 for basic, 2100 for deadly corridor
     bool visualize         = false;
     bool combination       = true;
 
@@ -150,7 +153,7 @@ void play_doom_ai_rnn_run()
 
     int64_t stack_frames   = 1;
     int64_t skip_frames    = 4;
-    int64_t episode_length = 300;
+    int64_t episode_length = 2100;
     bool visualize         = true;
     bool combination       = true;
 
@@ -183,6 +186,8 @@ void play_doom_ai_rnn_run()
             reward_sum += reward;
             done_ = done;
             episode_length++;
+
+            usleep(100000);
         }
 
         std::cout << "Episode Length : " << episode_length << std::endl;

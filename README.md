@@ -1,4 +1,19 @@
 # RecurrentPPO-Cpp
+
+<div style="display: flex; justify-content: center; gap: 20px; flex-wrap: wrap;">
+
+  <video width="320" controls style="max-width: 45%;">
+    <source src="videos/VizDoom-Basic.mp4" type="video/mp4">
+    Your browser does not support the video tag.
+  </video>
+
+  <video width="320" controls style="max-width: 45%;">
+    <source src="videos/VizDoom-Corridor.mp4" type="video/mp4">
+    Your browser does not support the video tag.
+  </video>
+
+</div>
+
 Recurrent PPO to solve Doom purely in CPP (Yuck). This is self-learning project.
 I feel like it will be messy but it is what it is I guess!. 
 The sources I followed:
@@ -82,7 +97,6 @@ It takes around 400-2000 episodes depending on the scenario with vanilla PPO (PP
 
 or
 
-```
 ```
 ./recurrent_ppo_cpp --operation play_ai_rnn
 ```

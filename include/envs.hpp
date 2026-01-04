@@ -43,6 +43,7 @@ class DoomENV : public Env {
     int64_t skip_frames_      = 4;
     bool combination          = false;
     int left_decision = 0, right_decision = 0, decision_count = 0;
+    int64_t downscale_rate;
 
   public:
     DoomENV(bool visible = false, size_t state_stack_size = 4, size_t episode_time_out = 200, int64_t skip_frames = 4, bool combination = false)
@@ -60,20 +61,21 @@ class DoomENV : public Env {
         // Not provided with environment due to licences
         // .
 
-        game_->loadConfig("../ViZDoom/scenarios/basic.cfg");
+        // game_->loadConfig("../ViZDoom/scenarios/basic.cfg");
+        game_->loadConfig("../ViZDoom/scenarios/deadly_corridor.cfg");
 
         //   Sets path to additional resources iwad file which is basically your scenario iwad.
         //   If not specified default doom2 maps will be used and it's pretty much useless...
         //  unless
         //   you want to play doom.
-        game_->setDoomScenarioPath("../ViZDoom/scenarios/basic.wad");
+        // game_->setDoomScenarioPath("../ViZDoom/scenarios/basic.wad");
+        game_->setDoomScenarioPath("../ViZDoom/scenarios/deadly_corridor.wad");
 
         // Set map to start(scenario.wad files can contain many maps).
         game_->setDoomMap("map01");
 
         // Sets resolution.Default is 320X240
-        game_->setScreenResolution(vizdoom::RES_160X120);
-
+        game_->setScreenResolution(vizdoom::RES_640X480);
         // Sets the screen buffer format.Not used here but now you can change it.Default is
         // CRCGCB.
         game_->setScreenFormat(vizdoom::GRAY8);
@@ -83,6 +85,10 @@ class DoomENV : public Env {
         game_->addAvailableButton(vizdoom::MOVE_LEFT);
         game_->addAvailableButton(vizdoom::MOVE_RIGHT);
         game_->addAvailableButton(vizdoom::ATTACK);
+        game_->addAvailableButton(vizdoom::MOVE_FORWARD);
+        game_->addAvailableButton(vizdoom::MOVE_BACKWARD);
+        game_->addAvailableButton(vizdoom::TURN_LEFT);
+        game_->addAvailableButton(vizdoom::TURN_RIGHT);
 
         // game_->addAvailableButton(vizdoom::MOVE_LEFT_RIGHT_DELTA, 1);
 
@@ -94,10 +100,12 @@ class DoomENV : public Env {
         game_->setEpisodeStartTime(10);
 
         // This is important if you are doing multiple step frame skipping
-        game_->setLivingReward(-1.0 / skip_frames);
+        // game_->setLivingReward(-1.0 / skip_frames); // Enable this for basic
+
+        downscale_rate = game_->getScreenHeight() / 60; // screen_height / target_network_height
 
         states_queue_ = std::make_unique<CircularTensorBuffer>(
-            1, game_->getScreenHeight() / 2, game_->getScreenWidth() / 2, torch::Device("cpu"), state_stack_size_);
+            1, game_->getScreenHeight() / downscale_rate, game_->getScreenWidth() / downscale_rate, torch::Device("cpu"), state_stack_size_);
 
         game_->init();
     };
@@ -113,11 +121,12 @@ class DoomENV : public Env {
             255.0;
 
         // Resize 120x160 -> 60x80
-        screen_tensor = torch::nn::functional::interpolate(screen_tensor,
-                                                           torch::nn::functional::InterpolateFuncOptions()
-                                                               .size(std::vector<int64_t>{screen_tensor.size(2) / 2, screen_tensor.size(3) / 2})
-                                                               .mode(torch::kBilinear)
-                                                               .align_corners(false));
+        screen_tensor = torch::nn::functional::interpolate(
+            screen_tensor,
+            torch::nn::functional::InterpolateFuncOptions()
+                .size(std::vector<int64_t>{screen_tensor.size(2) / downscale_rate, screen_tensor.size(3) / downscale_rate})
+                .mode(torch::kBilinear)
+                .align_corners(false));
 
         states_queue_->reset();
         states_queue_->push_front(screen_tensor[0]);
@@ -204,15 +213,16 @@ class DoomENV : public Env {
                          255.0;
 
             // Resize 120x160 -> 60x80
-            obs_tensor = torch::nn::functional::interpolate(obs_tensor,
-                                                            torch::nn::functional::InterpolateFuncOptions()
-                                                                .size(std::vector<int64_t>{obs_tensor.size(2) / 2, obs_tensor.size(3) / 2})
-                                                                .mode(torch::kBilinear)
-                                                                .align_corners(false));
+            obs_tensor = torch::nn::functional::interpolate(
+                obs_tensor,
+                torch::nn::functional::InterpolateFuncOptions()
+                    .size(std::vector<int64_t>{obs_tensor.size(2) / downscale_rate, obs_tensor.size(3) / downscale_rate})
+                    .mode(torch::kBilinear)
+                    .align_corners(false));
 
         } else {
             // If done, produce a zero state
-            obs_tensor = torch::zeros({1, 1, game_->getScreenHeight() / 2, game_->getScreenWidth() / 2}, torch::kFloat32);
+            obs_tensor = torch::zeros({1, 1, game_->getScreenHeight() / downscale_rate, game_->getScreenWidth() / downscale_rate}, torch::kFloat32);
         }
 
         // Add it to the buffer to stack the frames
@@ -229,8 +239,8 @@ class DoomENV : public Env {
     std::tuple<size_t, size_t, size_t> get_observation_size() const override
     {
         size_t channels = state_stack_size_;
-        size_t width    = game_->getScreenWidth() / 2;
-        size_t height   = game_->getScreenHeight() / 2;
+        size_t width    = game_->getScreenWidth() / downscale_rate;
+        size_t height   = game_->getScreenHeight() / downscale_rate;
         return {channels, height, width};
     }
 
