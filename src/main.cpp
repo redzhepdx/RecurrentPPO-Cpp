@@ -121,7 +121,7 @@ void train_ppo_rnn_run()
 
     int64_t stack_frames   = 1;
     int64_t skip_frames    = 4;
-    int64_t episode_length = 2100; // 300 for basic, 2100 for deadly corridor
+    int64_t episode_length = 500; // 300 for basic, 2100 for deadly corridor
     bool visualize         = false;
     bool combination       = true;
 

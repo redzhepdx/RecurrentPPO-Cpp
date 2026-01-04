@@ -1,17 +1,8 @@
 # RecurrentPPO-Cpp
 
-<div style="display: flex; justify-content: center; gap: 20px; flex-wrap: wrap;">
-
-  <video width="320" controls style="max-width: 45%;">
-    <source src="videos/VizDoom-Basic.mp4" type="video/mp4">
-    Your browser does not support the video tag.
-  </video>
-
-  <video width="320" controls style="max-width: 45%;">
-    <source src="videos/VizDoom-Corridor.mp4" type="video/mp4">
-    Your browser does not support the video tag.
-  </video>
-
+<div style="display: flex; justify-content: center; gap: 20px;">
+  <img src="videos/VizDoom-Basic.gif" width="320" alt="Demo video 1"/>
+  <img src="./videos/VizDoom-DeadlyCorridor.gif" width="320" alt="Demo video 2"/>
 </div>
 
 Recurrent PPO to solve Doom purely in CPP (Yuck). This is self-learning project.
