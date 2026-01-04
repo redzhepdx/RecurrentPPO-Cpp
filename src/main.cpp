@@ -95,8 +95,8 @@ void play_doom_ai_run()
         bool done_            = false;
         size_t episode_length = 0;
         while (!done_) {
-            auto action                           = ppo->act(state);
-            auto [next_state, reward, done, _, _] = env->step(action.squeeze(0));
+            auto action                                            = ppo->act(state);
+            auto [next_state, reward, done, terminated, truncated] = env->step(action.squeeze(0));
 
             state = next_state;
             reward_sum += reward;
@@ -147,7 +147,7 @@ void train_ppo_rnn_run()
     params.clip_epsilon         = 0.2;
     params.clip_vloss           = false;
     params.anneal_lr            = true;
-    params.reward_sharper       = 0.01;
+    params.reward_sharper       = 0.001;
     params.max_grad_norm        = 0.5;
     params.grad_acc_steps       = 4;
     bool separate_nets          = true;
@@ -192,8 +192,8 @@ void play_doom_ai_rnn_run()
         bool done_            = false;
         size_t episode_length = 0;
         while (!done_) {
-            auto action                           = ppo->act(state);
-            auto [next_state, reward, done, _, _] = env->step(action.squeeze(0));
+            auto action                                            = ppo->act(state);
+            auto [next_state, reward, done, terminated, truncated] = env->step(action.squeeze(0));
 
             state = next_state;
             reward_sum += reward;

@@ -180,8 +180,8 @@ struct RNNActorCriticNetworkImpl : torch::nn::Module {
 
     torch::Tensor forward(const torch::Tensor& x, const std::tuple<torch::Tensor, torch::Tensor>& lstm_state, torch::Tensor& done)
     {
-        auto [action_out, _, _, _, _] = get_actions(x, lstm_state, done);
-        return action_out;
+        auto res = get_actions(x, lstm_state, done);
+        return std::get<0>(res);
     }
 
     torch::Tensor get_value(const torch::Tensor& x, const std::tuple<torch::Tensor, torch::Tensor>& lstm_state, torch::Tensor& done)

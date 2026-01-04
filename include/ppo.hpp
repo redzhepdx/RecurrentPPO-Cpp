@@ -666,8 +666,8 @@ class PPO {
         std::cout << "\033[32m>>>>>>>>>>> Playing the trained agent!" << std::endl;
 
         for (size_t t = 0; t < max_steps; ++t) {
-            auto action                           = act(state);
-            auto [next_state, reward, done, _, _] = env.step(action.squeeze(0));
+            auto action                                            = act(state);
+            auto [next_state, reward, done, terminated, truncated] = env.step(action.squeeze(0));
 
             state = next_state;
 
