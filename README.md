@@ -1,7 +1,7 @@
 # RecurrentPPO-Cpp
 
 <div style="display: flex; justify-content: center; gap: 20px;">
-  <img src="videos/VizDoom-Basic.gif" width="320" alt="Demo video 1"/>
+  <img src="./videos/VizDoom-Basic.gif" width="320" alt="Demo video 1"/>
   <img src="./videos/VizDoom-DeadlyCorridor.gif" width="320" alt="Demo video 2"/>
 </div>
 
