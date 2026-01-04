@@ -47,26 +47,23 @@ class PPO_RNN {
     double max_return_rollout_return_ = INT32_MIN;
     double max_return_                = INT32_MIN;
     size_t current_episode_           = 0;
-    size_t log_rate_                  = 1;
-    size_t track_last_n               = 10;
-    size_t best_checkpoint_episode    = 0;
-    size_t save_top_n                 = 5;
+    size_t log_rate_                  = 1;  // Show metrics every N step
+    size_t track_last_n               = 10; // Track the progress of past N steps
+    size_t best_checkpoint_episode    = 0;  // Best episode index to be able to save the model
+    size_t save_top_n                 = 5;  // Only store top N epoch
     bool separate_nets                = false;
 
-    std::unique_ptr<CircularBuffer<double>> last_n_returns;
-    std::unique_ptr<CircularBuffer<size_t>> saved_checkpoints;
+    std::unique_ptr<CircularBuffer<double>> last_n_returns;    // We want to store the last N returns to calculate avg return
+    std::unique_ptr<CircularBuffer<size_t>> saved_checkpoints; // To be able to efficiently remove the old checkpoint we need this
 
     std::tuple<size_t, size_t, size_t> obs_size_;
 
     RNNActorCriticNetwork actor_critic_net;
 
-    std::unique_ptr<torch::optim::Adam> policy_optimizer;
-    std::unique_ptr<torch::optim::Adam> value_optimizer;
     std::unique_ptr<torch::optim::Adam> a2c_optimizer;
 
     std::unique_ptr<ReplayBuffer> buffer;
 
-    torch::Tensor batch_indices_;
     std::tuple<torch::Tensor, torch::Tensor> next_lstm_state_; // Global lstm state to track the historical information
     torch::Tensor next_done_;                                  // Global done tensor to support lstm state calculations mainly for the masking
 
@@ -79,7 +76,6 @@ class PPO_RNN {
 
         batch_size_      = params_.num_envs * params_.num_steps;
         mini_batch_size_ = batch_size_ / params_.num_minibatches;
-        batch_indices_   = torch::arange((int64_t)batch_size_);
 
         auto [lstm_layers, lstm_hidden_size] = actor_critic_net->get_lstm_info();
         next_lstm_state_ = std::make_tuple(torch::zeros({lstm_layers, 1, lstm_hidden_size}), torch::zeros({lstm_layers, 1, lstm_hidden_size}));
@@ -193,6 +189,7 @@ class PPO_RNN {
     {
         // dones[t] = terminal after executing action at t
         // episode_start[t] should be terminal from previous step: dones_out[t-1]
+        // so we can rebuild lstm states from scratch
         auto d      = dones.view({T, N});
         auto zeros  = torch::zeros({1, N}, d.options());
         auto starts = torch::cat({zeros, d.slice(/*dim=*/0, /*start=*/0, /*end=*/T - 1)}, /*dim=*/0);
@@ -252,10 +249,10 @@ class PPO_RNN {
         TORCH_CHECK(actions.size(0) == T, "actions length must equal T");
 
         std::vector<double> clip_fractions;
-        auto b_indices    = batch_indices_.clone();
         uint64_t steps    = 0;
         bool stop_updates = false;
 
+        // This is pretty much max environment length since we have a single environment
         const int64_t chunk_len              = std::max<int64_t>(1, (int64_t)mini_batch_size_); // e.g. 64
         auto [lstm_layers, lstm_hidden_size] = actor_critic_net->get_lstm_info();
 
@@ -268,6 +265,7 @@ class PPO_RNN {
             auto c_state = torch::zeros({lstm_layers, 1, lstm_hidden_size}, states.options());
 
             for (int64_t start = 0; start < T; start += chunk_len) {
+                // We slice it max_env_length by max_env_length
                 int64_t end = std::min<int64_t>(start + chunk_len, T);
 
                 auto mb_states     = states.slice(0, start, end).detach();         // [L,C,H,W]
@@ -503,6 +501,7 @@ class PPO_RNN {
 
             torch::Tensor terminal_value = torch::zeros({1}, state.options());
 
+            // If truncated boostrap the terminal value, this will be used while we are calculating the advantages
             if (truncated && !terminated) {
                 auto episode_start0 = torch::zeros({1}, state.options());
                 terminal_value =
@@ -567,19 +566,9 @@ class PPO_RNN {
         new_lr      = std::max(params_.min_lr, frac * params_.learning_rate_policy);
 
         // Update optimizers with new learning rate
-        if (separate_nets) {
-            for (auto* opt : {policy_optimizer.get(), value_optimizer.get()}) {
-                if (!opt)
-                    continue;
-                for (auto& group : opt->param_groups()) {
-                    static_cast<torch::optim::AdamOptions&>(group.options()).lr(new_lr);
-                }
-            }
-        } else {
-            if (a2c_optimizer) {
-                for (auto& group : a2c_optimizer->param_groups()) {
-                    static_cast<torch::optim::AdamOptions&>(group.options()).lr(new_lr);
-                }
+        if (a2c_optimizer) {
+            for (auto& group : a2c_optimizer->param_groups()) {
+                static_cast<torch::optim::AdamOptions&>(group.options()).lr(new_lr);
             }
         }
 

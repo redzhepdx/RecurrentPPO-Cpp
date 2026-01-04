@@ -27,7 +27,7 @@ struct CNNValueNetworkImpl : torch::nn::Module {
                 torch::nn::Flatten(), layer_init(torch::nn::Linear(n_flatten, 512)), torch::nn::Tanh(), layer_init(torch::nn::Linear(512, 1))));
     }
 
-    torch::Tensor forward(torch::Tensor x)
+    torch::Tensor forward(const torch::Tensor& x)
     {
         auto cnn_features = seq_cnn->forward(x);
         return seq_linear->forward(cnn_features);

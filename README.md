@@ -120,9 +120,16 @@ or
 }
 ```
 
+## How to contribute or read the code
+- Start with running it. If you can train a vanilla PPO on basic.wad and run inference without any issues then you are ready for the next step.
+- Check envs.hpp. I am not proud of that code but it is very similar to ViZDoom's C++ examples. Switch to another environment for example `deadly_corridor` or `defend_the_center` try to train Recurrent PPO this time.
+- Experimentation is the key, change hyper-params and environment rewards. Start with high level engineering instead of playing with algorithm. Add some extra metrics to the environment since it interacts with the agents directly.
+- Let's say you can train decent agents, now start playing with neural networks. Add or remove layers. Switch to GRU. Try continuous actions or sigmoid outputs. Don't forget, RecurrentPPO doesn't support separate networks so `a2c.hpp` is your friend. If you want to challenge yourself later, go ahead implement the separate_network version. I was just lazy. If you can update the network then you are already knowing your shit!
+- Go ahead and checl `ppo.hpp` and `ppo_rnn` and play around. Good practice that I couldn't do is implementing the [`KL_Adaptive_Scheduler`](https://skrl.readthedocs.io/en/latest/api/resources/schedulers/kl_adaptive.html) or `entropy_annealing` which is constant and a little annoying at the moment.
+- If you are still good and feeling resilient to stay in C++ realm, then you can do whatever you want. Fork the repo or make a PR with your changes. I have no tests. I will probably test it by trying your updates. Ahh if you want to add tests to the repo, you are always welcome.
 
 
-##IMPORTANT! 
+## IMPORTANT! 
 
 You should install only arm64 version of everything for macos. Also deal with the cmake.
 I had to use CMake because libtorch and vizdoom is crying for cmake. 

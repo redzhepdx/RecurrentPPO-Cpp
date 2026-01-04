@@ -15,6 +15,7 @@
 
 void play_doom_run()
 {
+    // Randomly plays the game
     int64_t stack_frames   = 3;
     int64_t skip_frames    = 4;
     int64_t episode_length = 300;
@@ -26,16 +27,19 @@ void play_doom_run()
 
 void train_ppo_run()
 {
+    // Train Vanilla PPO on the given environment
     torch::manual_seed(1337);
     std::srand(1337);
 
-    int64_t stack_frames   = 1;
-    int64_t skip_frames    = 4;
-    int64_t episode_length = 300;
-    bool visualize         = false;
-    bool combination       = true;
+    int64_t stack_frames   = 1;     // Store N frames
+    int64_t skip_frames    = 4;     // Apply actions N times
+    int64_t episode_length = 300;   // 300 for basic, 500 for deadly corridor
+    bool visualize         = false; // Don't render
+    bool combination       = true;  // Action combinations
 
     DoomENV env(visualize, stack_frames, episode_length, skip_frames, combination);
+
+    // Check the struct to learn about the parameters
     PPOParams params;
     params.total_time_steps     = 10000;
     params.num_steps            = 2048;
@@ -58,6 +62,8 @@ void train_ppo_run()
 
 void play_doom_ai_run()
 {
+    // Play with Vanilla PPO, if you already have a trained agent
+    // It will automatically load the last checkpoint (the best) from the "artifacts" folder
     torch::manual_seed(1337);
     std::srand(1337);
 
@@ -116,16 +122,20 @@ void play_doom_ai_run()
 
 void train_ppo_rnn_run()
 {
+
+    // Train Recurrent PPO on the given environment
     torch::manual_seed(1337);
     std::srand(1337);
 
-    int64_t stack_frames   = 1;
-    int64_t skip_frames    = 4;
-    int64_t episode_length = 500; // 300 for basic, 2100 for deadly corridor
-    bool visualize         = false;
-    bool combination       = true;
+    int64_t stack_frames   = 1;     // Store N frames
+    int64_t skip_frames    = 4;     // Apply actions N times
+    int64_t episode_length = 500;   // 300 for basic, 500 for deadly corridor
+    bool visualize         = false; // Don't render
+    bool combination       = true;  // Action combinations
 
     DoomENV env(visualize, stack_frames, episode_length, skip_frames, combination);
+
+    // Check the struct to learn about the parameters
     PPO_RNN_PARAMS params;
     params.total_time_steps     = 10000 * 2048;
     params.num_steps            = 2048;
@@ -133,7 +143,7 @@ void train_ppo_rnn_run()
     params.num_minibatches      = 1;
     params.learning_rate_policy = 3e-4;
     params.learning_rate_critic = 1e-5;
-    params.ent_coef             = 0.0;
+    params.ent_coef             = 0.01;
     params.clip_epsilon         = 0.2;
     params.clip_vloss           = false;
     params.anneal_lr            = true;
@@ -148,12 +158,15 @@ void train_ppo_rnn_run()
 
 void play_doom_ai_rnn_run()
 {
+
+    // Play with Vanilla PPO, if you already have a trained agent
+    // It will automatically load the last checkpoint (the best) from the "artifacts_rnn" folder
     torch::manual_seed(1337);
     std::srand(1337);
 
     int64_t stack_frames   = 1;
     int64_t skip_frames    = 4;
-    int64_t episode_length = 2100;
+    int64_t episode_length = 500;
     bool visualize         = true;
     bool combination       = true;
 

@@ -74,7 +74,7 @@ struct CategoricalDist {
     torch::Tensor sample()
     {
         auto probs = torch::softmax(logits, -1);
-        return probs.multinomial(1); // returns indices [batch, 1]
+        return probs.multinomial(1); // [batch, 1]
     }
 
     torch::Tensor log_prob(const torch::Tensor& actions)

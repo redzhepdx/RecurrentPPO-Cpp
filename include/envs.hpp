@@ -96,11 +96,29 @@ class DoomENV : public Env {
         game_->addAvailableGameVariable(vizdoom::AMMO2); // Causes episodes to finish after 200 tics (actions)
         game_->setEpisodeTimeout(episode_time_out);
 
+        game_->setKillReward(10);
+        // game_->setDamageTakenReward(-1);
+        game_->setHitReward(-5);
+        game_->setLivingReward(1);
+
+        // Leaving this here if you want to do any reward engineering
+        std::cout << "---------------------Rewards---------------" << std::endl;
+        std::cout << "Hit Taken / DamageTaken / Death Penalties" << std::endl;
+        std::cout << game_->getHitTakenPenalty() << " " << game_->getDamageTakenPenalty() << " " << game_->getDeathPenalty() << std::endl;
+        std::cout << "Hit / Item / Kill Rewards" << std::endl;
+        std::cout << game_->getHitReward() << " " << game_->getItemReward() << " " << game_->getKillReward() << std::endl;
+        std::cout << "Frag / Death / Armor Rewards" << std::endl;
+        std::cout << game_->getFragReward() << " " << game_->getDeathReward() << " " << game_->getArmorReward() << std::endl;
+        std::cout << "Health / Living / Map Exit Rewards" << std::endl;
+        std::cout << game_->getHealthReward() << " " << game_->getLivingReward() << " " << game_->getMapExitReward() << std::endl;
+        std::cout << "Secret / DMG Made / DMG Taken Rewards" << std::endl;
+        std::cout << game_->getSecretReward() << " " << game_->getDamageMadeReward() << " " << game_->getDamageTakenReward() << std::endl;
+
         // Makes episodes start after 10 tics (~after raising the weapon)
-        game_->setEpisodeStartTime(10);
+        // game_->setEpisodeStartTime(10);
 
         // This is important if you are doing multiple step frame skipping
-        // game_->setLivingReward(-1.0 / skip_frames); // Enable this for basic
+        // game_->setLivingReward(-1.0 / skip_frames); // Enable this for basic.wad since it shouldn't waste time to kill the monster
 
         downscale_rate = game_->getScreenHeight() / 60; // screen_height / target_network_height
 

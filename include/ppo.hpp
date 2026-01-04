@@ -47,14 +47,14 @@ class PPO {
     double max_return_rollout_return_ = INT32_MIN;
     double max_return_                = INT32_MIN;
     size_t current_episode_           = 0;
-    size_t log_rate_                  = 1;
-    size_t track_last_n               = 10;
-    size_t best_checkpoint_episode    = 0;
-    size_t save_top_n                 = 5;
+    size_t log_rate_                  = 1;  // Show metrics every N step
+    size_t track_last_n               = 10; // Track the progress of past N steps
+    size_t best_checkpoint_episode    = 0;  // Best episode index to be able to save the model
+    size_t save_top_n                 = 5;  // Only store top N epoch
     bool separate_nets                = false;
 
-    std::unique_ptr<CircularBuffer<double>> last_n_returns;
-    std::unique_ptr<CircularBuffer<size_t>> saved_checkpoints;
+    std::unique_ptr<CircularBuffer<double>> last_n_returns;    // We want to store the last N returns to calculate avg return
+    std::unique_ptr<CircularBuffer<size_t>> saved_checkpoints; // To be able to efficiently remove the old checkpoint we need this
 
     std::tuple<size_t, size_t, size_t> obs_size_;
 
@@ -68,7 +68,7 @@ class PPO {
 
     std::unique_ptr<ReplayBuffer> buffer;
 
-    torch::Tensor batch_indices_;
+    torch::Tensor batch_indices_; // Calculate the indices once and shuffle every step later
 
   public:
     PPO(std::tuple<size_t, size_t, size_t> obs_size, int action_size, PPOParams params, bool separate_nets)

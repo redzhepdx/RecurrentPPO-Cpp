@@ -42,38 +42,30 @@ struct CNNActorCriticNetworkImpl : torch::nn::Module {
         actor_log_std = register_parameter("actor_log_std", torch::full({static_cast<long long>(action_dim)}, -3.0));
     }
 
-    torch::Tensor forward(torch::Tensor x)
+    torch::Tensor forward(const torch::Tensor& x)
     {
         auto cnn_features = seq_cnn->forward(x);
         return seq_actor->forward(cnn_features);
     }
 
-    torch::Tensor get_value(torch::Tensor x)
+    torch::Tensor get_value(const torch::Tensor& x)
     {
         auto cnn_features = seq_cnn->forward(x);
         return seq_value->forward(cnn_features);
     }
 
-    std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> get_actions(torch::Tensor x,
+    std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> get_actions(const torch::Tensor& x,
                                                                                        c10::optional<torch::Tensor> action_opt = c10::nullopt)
     {
         auto cnn_features = seq_cnn->forward(x);
         auto action_means = seq_actor->forward(cnn_features);
 
-        // auto log_std_param = torch::clamp(actor_log_std, -2.0, 2.0);
-        // auto log_std       = log_std_param.expand_as(action_means);
-
-        // NormalDistribution dist(action_means, log_std.exp());
-        // TanhNormal dist(action_means, log_std.exp());
         CategoricalDist dist(action_means);
-        // MultiBernoulliDist dist(action_means);
 
         torch::Tensor action_out;
         if (action_opt.has_value()) {
-            // action_out = action_opt.value().squeeze(1);
-            action_out = action_opt.value(); //.unsqueeze(0);
+            action_out = action_opt.value();
         } else {
-            // action_out = dist.sample(x.size(0));
             action_out = dist.sample();
         }
         auto log_prob = dist.log_prob(action_out);
@@ -143,7 +135,7 @@ struct RNNActorCriticNetworkImpl : torch::nn::Module {
     }
 
     std::tuple<torch::Tensor, std::tuple<torch::Tensor, torch::Tensor>>
-    get_states(torch::Tensor x, std::tuple<torch::Tensor, torch::Tensor> lstm_state, torch::Tensor done)
+    get_states(const torch::Tensor& x, const std::tuple<torch::Tensor, torch::Tensor>& lstm_state, torch::Tensor& done)
     {
         auto hidden = seq_feature->forward(seq_cnn->forward(x)); // [B, 512]
 
@@ -186,22 +178,22 @@ struct RNNActorCriticNetworkImpl : torch::nn::Module {
         return {output, std::make_tuple(h_state, c_state)};
     }
 
-    torch::Tensor forward(torch::Tensor x, std::tuple<torch::Tensor, torch::Tensor> lstm_state, torch::Tensor done)
+    torch::Tensor forward(const torch::Tensor& x, const std::tuple<torch::Tensor, torch::Tensor>& lstm_state, torch::Tensor& done)
     {
         auto [action_out, _, _, _, _] = get_actions(x, lstm_state, done);
         return action_out;
     }
 
-    torch::Tensor get_value(torch::Tensor x, std::tuple<torch::Tensor, torch::Tensor> lstm_state, torch::Tensor done)
+    torch::Tensor get_value(const torch::Tensor& x, const std::tuple<torch::Tensor, torch::Tensor>& lstm_state, torch::Tensor& done)
     {
         auto [out, _] = get_states(x, lstm_state, done);
         return seq_value->forward(out);
     }
 
     std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, std::tuple<torch::Tensor, torch::Tensor>>
-    get_actions(torch::Tensor x,
-                std::tuple<torch::Tensor, torch::Tensor> lstm_state,
-                torch::Tensor done,
+    get_actions(const torch::Tensor& x,
+                const std::tuple<torch::Tensor, torch::Tensor>& lstm_state,
+                torch::Tensor& done,
                 c10::optional<torch::Tensor> action_opt = c10::nullopt)
     {
         auto [out, lstm_state_new] = get_states(x, lstm_state, done);
@@ -209,7 +201,6 @@ struct RNNActorCriticNetworkImpl : torch::nn::Module {
         auto action_means = seq_actor->forward(out);
 
         CategoricalDist dist(action_means);
-        // MultiBernoulliDist dist(action_means);
 
         torch::Tensor action_out;
         if (action_opt.has_value()) {
