@@ -157,3 +157,5 @@ Maybe one day I will port everything to NOB and be happy.
 [ ] Adaptive Reward Normalization.
 
 [ ] Using pre-trained vision encoders.
+
+[ ] Visual graphs and metrics instead of prints.
