@@ -1,6 +1,9 @@
 # RecurrentPPO-Cpp
 
-![Test GIF](./videos/VizDoom-Basic-Optimized.gif)
+<!-- ![Test GIF](./videos/VizDoom-Basic-Optimized.gif) -->
+
+![Test GIF](https://raw.githubusercontent.com/redzhepdx/RecurrentPPO-Cpp/main/videos/VizDoom-Basic-Optimized.gif)
+
 
 <!-- <div style="display: flex; justify-content: center; gap: 20px;">
   <img src="./videos/VizDoom-Basic-Optimized.gif" width="320" alt="Basic"/>
