@@ -1,9 +1,11 @@
 # RecurrentPPO-Cpp
 
-<div style="display: flex; justify-content: center; gap: 20px;">
+![Test GIF](./videos/VizDoom-Basic-Optimized.gif)
+
+<!-- <div style="display: flex; justify-content: center; gap: 20px;">
   <img src="./videos/VizDoom-Basic-Optimized.gif" width="320" alt="Basic"/>
   <img src="./videos/VizDoom-DeadlyCorridor-Optimized.gif" width="320" alt="Deadly Corridor"/>
-</div>
+</div> -->
 
 Recurrent PPO to solve Doom purely in CPP (Yuck). This is self-learning project.
 I feel like it will be messy but it is what it is I guess!. 
