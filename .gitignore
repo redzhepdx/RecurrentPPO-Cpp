@@ -41,6 +41,7 @@
 *.dwo
 *libtorch
 *.vscode
+*.DS_Store
 *ViZDoom*
 *artifacts
 *build
