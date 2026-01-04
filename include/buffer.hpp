@@ -25,8 +25,11 @@ class TrajectoryBuffer {
     torch::Tensor rewards_;
     torch::Tensor next_states_;
     torch::Tensor dones_;
+    torch::Tensor terminates_;
+    torch::Tensor truncates_;
     torch::Tensor log_probs_;
     torch::Tensor values_;
+    torch::Tensor terminal_values_;
 
   public:
     TrajectoryBuffer(size_t capacity) : capacity_(capacity) {}
@@ -37,11 +40,11 @@ class TrajectoryBuffer {
              const torch::Tensor& reward,
              const torch::Tensor& next_state,
              const torch::Tensor& done,
-             const torch::Tensor& value)
+             const torch::Tensor& terminated,
+             const torch::Tensor& truncated,
+             const torch::Tensor& value,
+             const torch::Tensor& terminal_value)
     {
-        //     std::cout << "Actions : " << action.sizes() << "\nLog Probs : " << log_prob.sizes() << std::endl;
-        //     std::cout << "States : " << state.sizes() << "\nNext States : " << next_state.sizes() << std::endl;
-        //     std::cout << "Rewards : " << reward.sizes() << "\nDones : " << done.sizes() << "\nValues : " << value.sizes() << std::endl;
 
         if (!states_.defined() || states_.numel() == 0) {
             states_      = allocate_with_capacity_like(state, capacity_);
@@ -49,9 +52,12 @@ class TrajectoryBuffer {
             actions_     = allocate_with_capacity_like(action, capacity_);
             log_probs_   = allocate_with_capacity_like(log_prob, capacity_);
 
-            rewards_ = torch::empty({static_cast<int64_t>(capacity_), 1}, reward.options());
-            dones_   = torch::empty({static_cast<int64_t>(capacity_), 1}, done.options());
-            values_  = torch::empty({static_cast<int64_t>(capacity_), 1}, value.options());
+            rewards_         = torch::empty({static_cast<int64_t>(capacity_), 1}, reward.options());
+            dones_           = torch::empty({static_cast<int64_t>(capacity_), 1}, done.options());
+            terminates_      = torch::empty({static_cast<int64_t>(capacity_), 1}, done.options());
+            truncates_       = torch::empty({static_cast<int64_t>(capacity_), 1}, done.options());
+            values_          = torch::empty({static_cast<int64_t>(capacity_), 1}, value.options());
+            terminal_values_ = torch::empty({static_cast<int64_t>(capacity_), 1}, value.options());
         }
 
         states_[position_]      = state;
@@ -60,13 +66,17 @@ class TrajectoryBuffer {
         rewards_[position_]     = reward;
         next_states_[position_] = next_state;
         dones_[position_]       = done;
+        truncates_[position_]   = truncated;
+        terminates_[position_]  = terminated;
 
-        values_[position_] = value;
+        values_[position_]          = value;
+        terminal_values_[position_] = terminal_value;
 
         position_ = (position_ + 1) % capacity_;
     };
 
-    std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor> sample(size_t batch_size)
+    std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+    sample(size_t batch_size)
     {
         auto indices = torch::randint(0, states_.size(0), {(long long)batch_size}, torch::kLong);
 
@@ -75,7 +85,10 @@ class TrajectoryBuffer {
                 rewards_.index_select(0, indices),
                 next_states_.index_select(0, indices),
                 dones_.index_select(0, indices),
-                values_.index_select(0, indices)};
+                terminates_.index_select(0, indices),
+                truncates_.index_select(0, indices),
+                values_.index_select(0, indices),
+                terminal_values_.index_select(0, indices)};
     }
 
     torch::Tensor get_states() const { return states_.contiguous(); }
@@ -85,18 +98,25 @@ class TrajectoryBuffer {
     torch::Tensor get_dones() const { return dones_.contiguous(); }
     torch::Tensor get_actions() const { return actions_.contiguous(); }
     torch::Tensor get_values() const { return values_.contiguous(); }
+    torch::Tensor get_terminates() const { return terminates_.contiguous(); }
+    torch::Tensor get_truncates() const { return truncates_.contiguous(); }
+    torch::Tensor get_terminal_values() const { return terminal_values_.contiguous(); }
 
     size_t size() const { return states_.size(0); }
 
     void clear()
     {
-        states_      = torch::empty({0});
-        actions_     = torch::empty({0});
-        rewards_     = torch::empty({0});
-        next_states_ = torch::empty({0});
-        dones_       = torch::empty({0});
-        log_probs_   = torch::empty({0});
-        position_    = 0;
+        states_          = torch::empty({0});
+        actions_         = torch::empty({0});
+        rewards_         = torch::empty({0});
+        next_states_     = torch::empty({0});
+        dones_           = torch::empty({0});
+        log_probs_       = torch::empty({0});
+        values_          = torch::empty({0});
+        terminates_      = torch::empty({0});
+        truncates_       = torch::empty({0});
+        terminal_values_ = torch::empty({0});
+        position_        = 0;
     }
 };
 

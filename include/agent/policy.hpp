@@ -31,7 +31,6 @@ struct CNNPolicyNetworkImpl : torch::nn::Module {
                                                            layer_init(torch::nn::Linear(n_flatten, 512)),
                                                            torch::nn::Tanh(),
                                                            layer_init(torch::nn::Linear(512, action_dim))));
-        //    torch::nn::Tanh()));
 
         // nn.Parameter equivalent
         actor_log_std = register_parameter("actor_log_std", torch::full({static_cast<long long>(action_dim)}, -3.0));
@@ -63,7 +62,6 @@ struct CNNPolicyNetworkImpl : torch::nn::Module {
             // action_out = dist.sample(x.size(0));
             action_out = dist.sample();
         }
-        // std::cout << action_out.sizes() << std::endl;
 
         auto log_prob = dist.log_prob(action_out);
 

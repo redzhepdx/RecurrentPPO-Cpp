@@ -1,6 +1,11 @@
 # RecurrentPPO-Cpp
 Recurrent PPO to solve Doom purely in CPP (Yuck). This is self-learning project.
-I feel like it will be messy but it is what it is I guess!.
+I feel like it will be messy but it is what it is I guess!. 
+The sources I followed:
+
+1. Cleanrl : https://github.com/vwxyzjn/cleanrl/blob/master/cleanrl/ppo_atari_lstm.py#L310
+2. StableBaselines3 : https://github.com/DLR-RM/stable-baselines3/blob/master/stable_baselines3/ppo/ppo.py
+3. and SKRL for guidance and pseudo-code
 
 
 ##### Dependencies
@@ -53,20 +58,33 @@ cmake -DCMAKE_BUILD_TYPE=Release .. && cmake --build . -v
 
 ## 4. Run training
 
-Maybe you should modify the `src/main.cpp` if you want to change the environment. Search for `train_ppo_run` function. Similar to StableBaselines.
+Maybe you should modify the `src/main.cpp` if you want to change the environment. Search for `train_ppo_run`/`train_ppo_rnn_run` function. Similar to StableBaselines.
 
 ```
 ./recurrent_ppo_cpp --operation train
 ```
 
-It takes around 400-2000 episodes depending on the scenario. Start with simple.wad. It is default.
+or
+
+```
+./recurrent_ppo_cpp --operation train_rnn
+```
+
+It takes around 400-2000 episodes depending on the scenario with vanilla PPO (PPO-RNN 20-50 updates). Start with simple.wad. It is default.
 
 ## 4. Evaluate the trained agent
 
-#### IMPORTANT : If you changed something in `train_ppo_run` function related to the agent or environment, do the same changes in `play_doom_ai_run` otherwise you will use apples to squeeze orange juice and you will be very very sad.
+#### IMPORTANT : If you changed something in `train_ppo_run`/`train_ppo_rnn_run` function related to the agent or environment, do the same changes in `play_doom_ai_run`/`play_doom_ai_rnn_run` otherwise you will use apples to squeeze orange juice and you will be very very sad.
 
 ```
 ./recurrent_ppo_cpp --operation play_ai
+```
+
+or
+
+```
+```
+./recurrent_ppo_cpp --operation play_ai_rnn
 ```
 
 #### VSCode Setup 

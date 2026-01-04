@@ -25,13 +25,13 @@ torch::Tensor bits_from_scalar(const torch::Tensor& scalar_tensor, int64_t num_b
 // Abstract Environment class
 class Env {
   public:
-    virtual torch::Tensor reset()                                                     = 0;
-    virtual std::tuple<torch::Tensor, double, bool> step(const torch::Tensor& action) = 0;
-    virtual std::tuple<size_t, size_t, size_t> get_observation_size() const           = 0;
-    virtual size_t get_action_size() const                                            = 0;
-    virtual ~Env()                                                                    = default;
-    virtual double last_total_reward() const                                          = 0;
-    virtual double last_reward() const                                                = 0;
+    virtual torch::Tensor reset()                                                                 = 0;
+    virtual std::tuple<torch::Tensor, double, bool, bool, bool> step(const torch::Tensor& action) = 0;
+    virtual std::tuple<size_t, size_t, size_t> get_observation_size() const                       = 0;
+    virtual size_t get_action_size() const                                                        = 0;
+    virtual ~Env()                                                                                = default;
+    virtual double last_total_reward() const                                                      = 0;
+    virtual double last_reward() const                                                            = 0;
 };
 
 class DoomENV : public Env {
@@ -173,7 +173,7 @@ class DoomENV : public Env {
         return action_to_register;
     }
 
-    std::tuple<torch::Tensor, double, bool> step(const torch::Tensor& action) override
+    std::tuple<torch::Tensor, double, bool, bool, bool> step(const torch::Tensor& action) override
     {
         torch::Tensor action_to_register = preprocess_action(action);
 
@@ -186,7 +186,8 @@ class DoomENV : public Env {
 
         bool done = game_->isEpisodeFinished();
 
-        // bool timeout = game_->isEpisodeTimeoutReached(); // We don't need it but just in case for the future
+        bool terminated = game_->isEpisodeTimeoutReached(); // We don't need it but just in case for the future
+        bool truncated  = !terminated && done;
 
         // Get the current state if not done
         vizdoom::GameStatePtr state = nullptr;
@@ -222,7 +223,7 @@ class DoomENV : public Env {
             states_queue_->reset();
         }
 
-        return {states_queue_->view().unsqueeze(0), reward, done};
+        return {states_queue_->view().unsqueeze(0), reward, done, terminated, truncated};
     }
 
     std::tuple<size_t, size_t, size_t> get_observation_size() const override

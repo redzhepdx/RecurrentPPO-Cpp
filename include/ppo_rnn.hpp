@@ -13,7 +13,7 @@
 #include <torch/torch.h>
 #include <tuple>
 
-typedef struct PPOParams {
+typedef struct PPO_RNN_PARAMS {
     size_t total_time_steps     = 1000000; // total timesteps of the experiments
     double learning_rate_policy = 1e-4;    // the learning rate of the optimizer
     double learning_rate_critic = 1e-5;    // the learning rate of the optimizer
@@ -34,11 +34,11 @@ typedef struct PPOParams {
     double target_kl            = 0.02;    // the target KL divergence threshold
     double reward_sharper       = 0.01;    // Reward scaling parameter
     size_t grad_acc_steps       = 2;       // Gradient accumulation step counts
-} PPOParams;
+} PPO_RNN_PARAMS;
 
-class PPO {
+class PPO_RNN {
   private:
-    PPOParams params_;
+    PPO_RNN_PARAMS params_;
 
     size_t batch_size_                = 0; // batch_size to be computed during runtime
     size_t mini_batch_size_           = 0; // mini batch size to be computed during runtime
@@ -58,9 +58,7 @@ class PPO {
 
     std::tuple<size_t, size_t, size_t> obs_size_;
 
-    CNNPolicyNetwork policy_net;
-    CNNValueNetwork value_net;
-    CNNActorCriticNetwork actor_critic_net;
+    RNNActorCriticNetwork actor_critic_net;
 
     std::unique_ptr<torch::optim::Adam> policy_optimizer;
     std::unique_ptr<torch::optim::Adam> value_optimizer;
@@ -69,32 +67,27 @@ class PPO {
     std::unique_ptr<ReplayBuffer> buffer;
 
     torch::Tensor batch_indices_;
+    std::tuple<torch::Tensor, torch::Tensor> next_lstm_state_; // Global lstm state to track the historical information
+    torch::Tensor next_done_;                                  // Global done tensor to support lstm state calculations mainly for the masking
 
   public:
-    PPO(std::tuple<size_t, size_t, size_t> obs_size, int action_size, PPOParams params, bool separate_nets)
+    PPO_RNN(std::tuple<size_t, size_t, size_t> obs_size, int action_size, PPO_RNN_PARAMS params, bool separate_nets)
         : params_(params), obs_size_(obs_size), separate_nets(separate_nets)
     {
-        if (separate_nets) {
-            policy_net = CNNPolicyNetwork(obs_size, action_size);
-            value_net  = CNNValueNetwork(obs_size);
-
-            policy_optimizer =
-                std::make_unique<torch::optim::Adam>(policy_net->parameters(), torch::optim::AdamOptions(params_.learning_rate_policy));
-            value_optimizer = std::make_unique<torch::optim::Adam>(value_net->parameters(), torch::optim::AdamOptions(params_.learning_rate_critic));
-
-        } else {
-            actor_critic_net = CNNActorCriticNetwork(obs_size, action_size);
-            a2c_optimizer =
-                std::make_unique<torch::optim::Adam>(actor_critic_net->parameters(), torch::optim::AdamOptions(params_.learning_rate_policy));
-        }
+        actor_critic_net = RNNActorCriticNetwork(obs_size, action_size);
+        a2c_optimizer = std::make_unique<torch::optim::Adam>(actor_critic_net->parameters(), torch::optim::AdamOptions(params_.learning_rate_policy));
 
         batch_size_      = params_.num_envs * params_.num_steps;
         mini_batch_size_ = batch_size_ / params_.num_minibatches;
         batch_indices_   = torch::arange((int64_t)batch_size_);
 
+        auto [lstm_layers, lstm_hidden_size] = actor_critic_net->get_lstm_info();
+        next_lstm_state_ = std::make_tuple(torch::zeros({lstm_layers, 1, lstm_hidden_size}), torch::zeros({lstm_layers, 1, lstm_hidden_size}));
+        next_done_       = torch::zeros({1});
+
         buffer = std::make_unique<ReplayBuffer>(buffer_capacity_);
 
-        load_networks("artifacts");
+        load_networks("artifacts_rnn");
 
         last_n_returns    = std::make_unique<CircularBuffer<double>>(track_last_n);
         saved_checkpoints = std::make_unique<CircularBuffer<size_t>>(save_top_n);
@@ -124,25 +117,10 @@ class PPO {
     void save_networks(const std::string& folder_path)
     {
         std::filesystem::create_directories(folder_path);
-        if (separate_nets) {
-            {
-                torch::serialize::OutputArchive policy_archive;
-                policy_net->save(policy_archive);
-                policy_archive.save_to(folder_path + "/policy_" + std::to_string(best_checkpoint_episode) + ".pt");
-            }
 
-            {
-                torch::serialize::OutputArchive value_archive;
-                value_net->save(value_archive);
-                value_archive.save_to(folder_path + "/value_" + std::to_string(best_checkpoint_episode) + ".pt");
-            }
-        } else {
-            {
-                torch::serialize::OutputArchive a2c_archive;
-                actor_critic_net->save(a2c_archive);
-                a2c_archive.save_to(folder_path + "/a2c_" + std::to_string(best_checkpoint_episode) + ".pt");
-            }
-        }
+        torch::serialize::OutputArchive a2c_archive;
+        actor_critic_net->save(a2c_archive);
+        a2c_archive.save_to(folder_path + "/a2c_" + std::to_string(best_checkpoint_episode) + ".pt");
 
         if (current_episode_ % log_rate_ == 0) {
             std::cout << "\033[31m>>>>>>>>>>>Saved networks to: " << folder_path << std::endl;
@@ -172,19 +150,9 @@ class PPO {
             }
         }
 
-        if (separate_nets) {
-            torch::serialize::InputArchive policy_archive;
-            policy_archive.load_from(folder_path + "/policy_" + std::to_string(last_epoch) + ".pt");
-            policy_net->load(policy_archive);
-
-            torch::serialize::InputArchive value_archive;
-            value_archive.load_from(folder_path + "/value_" + std::to_string(last_epoch) + ".pt");
-            value_net->load(value_archive);
-        } else {
-            torch::serialize::InputArchive a2c_archive;
-            a2c_archive.load_from(folder_path + "/a2c_" + std::to_string(last_epoch) + ".pt");
-            actor_critic_net->load(a2c_archive);
-        }
+        torch::serialize::InputArchive a2c_archive;
+        a2c_archive.load_from(folder_path + "/a2c_" + std::to_string(last_epoch) + ".pt");
+        actor_critic_net->load(a2c_archive);
 
         std::cout << "\033[31m>>>>>>>>>>>Loaded policy & value networks from: " << folder_path << "\nLoaded epoch index :" << last_epoch << std::endl;
     }
@@ -199,25 +167,36 @@ class PPO {
 
     void remove_old_checkpoints(const std::string& folder_path)
     {
-        if (!saved_checkpoints->is_full()) {
+        if (!saved_checkpoints->is_full())
             return;
-        }
 
-        size_t first_checkpoint_index = saved_checkpoints->pop_first();
-        std::vector<std::string> network_names =
-            (separate_nets == true) ? std::vector<std::string>({"policy", "value"}) : std::vector<std::string>({"a2c"});
+        size_t old_ep = saved_checkpoints->pop_first();
 
-        for (auto& path : network_names) {
-            std::filesystem::path model_path = folder_path + "/" + path + "_" + std::to_string(first_checkpoint_index) + ".pt";
-            try {
-                bool removed = std::filesystem::remove(model_path);
-                if (!removed) {
-                    std::cout << "Something went wrong while removing " << model_path << std::endl;
-                }
-            } catch (const std::filesystem::filesystem_error& e) {
-                std::cerr << "Error deleting file: " << e.what() << "\n";
-            }
+        std::filesystem::path model_path = folder_path + "/a2c_" + std::to_string(old_ep) + ".pt";
+        try {
+            std::filesystem::remove(model_path);
+        } catch (const std::filesystem::filesystem_error& e) {
+            std::cerr << "Error deleting file: " << e.what() << "\n";
         }
+    }
+
+    void reset_rnn_states()
+    {
+        auto [lstm_layers, lstm_hidden_size] = actor_critic_net->get_lstm_info();
+        next_lstm_state_ = std::make_tuple(torch::zeros({lstm_layers, 1, lstm_hidden_size}), torch::zeros({lstm_layers, 1, lstm_hidden_size}));
+        next_done_       = torch::zeros({1});
+    }
+
+    static torch::Tensor compute_episode_starts_from_dones(const torch::Tensor& dones, // shape [T * N]
+                                                           int64_t T,
+                                                           int64_t N)
+    {
+        // dones[t] = terminal after executing action at t
+        // episode_start[t] should be terminal from previous step: dones_out[t-1]
+        auto d      = dones.view({T, N});
+        auto zeros  = torch::zeros({1, N}, d.options());
+        auto starts = torch::cat({zeros, d.slice(/*dim=*/0, /*start=*/0, /*end=*/T - 1)}, /*dim=*/0);
+        return starts.flatten(); // [T * N]
     }
 
     void optimize(const TrajectoryBuffer& tb, torch::Tensor& advantages, torch::Tensor& returns)
@@ -230,80 +209,91 @@ class PPO {
 
         size_t update_count = 0;
 
+        auto initial_h_state    = std::get<0>(next_lstm_state_).clone();
+        auto initial_c_state    = std::get<1>(next_lstm_state_).clone();
+        auto initial_lstm_state = std::make_tuple(initial_h_state, initial_c_state);
+
         size_t channel, width, height;
         std::tie(channel, width, height) = obs_size_;
 
+        const int64_t T = (int64_t)params_.num_steps;
+        const int64_t N = (int64_t)params_.num_envs;
+
         // Perform PPO optimization step
-        auto states      = tb.get_states();                // [B, C, H, W]
-        auto actions     = tb.get_actions();               // [B, num_actions]
-        auto rewards     = tb.get_rewards().squeeze(-1);   // [B]
-        auto dones       = tb.get_dones().squeeze(-1);     // [B]
-        auto next_states = tb.get_next_states();           // [B, C, H, W]
-        auto log_probs   = tb.get_log_probs().squeeze(-1); // [B]
-        auto values      = tb.get_values().squeeze(-1);    // [B]
+        auto states      = tb.get_states();                // [B=T*N, C, H, W]
+        auto actions     = tb.get_actions();               // [B=T*N, num_actions]
+        auto rewards     = tb.get_rewards().squeeze(-1);   // [B=T*N]
+        auto dones       = tb.get_dones().squeeze(-1);     // [B=T*N]
+        auto next_states = tb.get_next_states();           // [B=T*N, C, H, W]
+        auto log_probs   = tb.get_log_probs().squeeze(-1); // [B=T*N]
+        auto values      = tb.get_values().squeeze(-1);    // [B=T*N]
+
+        TORCH_CHECK(states.size(0) == T * N, "states first dim must be T*N");
+        TORCH_CHECK(dones.size(0) == T * N, "dones first dim must be T*N");
 
         if (current_episode_ % log_rate_ == 0) {
             std::cout << "\033[31m>>>>>>>>>>>[ADV] mean=" << advantages.mean().item<double>() << " std=" << advantages.std().item<double>()
                       << std::endl;
         }
 
+        auto episode_starts = compute_episode_starts_from_dones(dones, T, N); // [T * N]
+
         // Normalize advantages
-        // auto norm_advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8);
         torch::Tensor used_advantages = advantages;
         if (params_.norm_adv) {
             used_advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8);
         }
+
+        // Ensure correct shape assumptions
+        TORCH_CHECK(states.dim() == 4, "states must be [T,C,H,W] when num_envs=1");
+        TORCH_CHECK(states.size(0) == T, "states length must equal T");
+
+        // Actions: [T] (Categorical) or [T,K]
+        TORCH_CHECK(actions.size(0) == T, "actions length must equal T");
 
         std::vector<double> clip_fractions;
         auto b_indices    = batch_indices_.clone();
         uint64_t steps    = 0;
         bool stop_updates = false;
 
+        const int64_t chunk_len              = std::max<int64_t>(1, (int64_t)mini_batch_size_); // e.g. 64
+        auto [lstm_layers, lstm_hidden_size] = actor_critic_net->get_lstm_info();
+
         for (size_t epoch = 0; epoch < params_.ppo_epochs; ++epoch) {
             if (current_episode_ % log_rate_ == 0) {
                 std::cout << "\033[37m>>>>>>>>>>>[PPO EPOCH] " << epoch + 1 << "/" << params_.ppo_epochs << std::endl;
             }
-            // Generate a random permutation of indices
-            auto perm = torch::randperm(b_indices.size(0));
+            // Reconstruct from zeros each epoch (rollout starts from reset_rnn_states()) :contentReference[oaicite:4]{index=4}
+            auto h_state = torch::zeros({lstm_layers, 1, lstm_hidden_size}, states.options());
+            auto c_state = torch::zeros({lstm_layers, 1, lstm_hidden_size}, states.options());
 
-            // Index the tensor with the random indices
-            b_indices = b_indices.index({perm});
+            for (int64_t start = 0; start < T; start += chunk_len) {
+                int64_t end = std::min<int64_t>(start + chunk_len, T);
 
-            for (size_t start = 0; start < batch_size_; start += mini_batch_size_) {
-                auto end                = start + mini_batch_size_;
-                auto mini_batch_indices = b_indices.slice(0, start, end);
+                auto mb_states     = states.slice(0, start, end).detach();         // [L,C,H,W]
+                auto mb_log_probs  = log_probs.slice(0, start, end).detach();      // [L]
+                auto mb_values     = values.slice(0, start, end).detach();         // [L]
+                auto mb_returns    = returns.slice(0, start, end).detach();        // [L]
+                auto mb_advantages = advantages.slice(0, start, end).detach();     // [L]
+                auto mb_ep_start   = episode_starts.slice(0, start, end).detach(); // [L]
 
-                auto mb_states     = states.index({mini_batch_indices}).detach();          // [MB, C, H, W]
-                auto mb_action     = actions.index({mini_batch_indices}).detach();         // [MB, num_actions]
-                auto mb_values     = values.index({mini_batch_indices}).detach();          // [MB]
-                auto mb_returns    = returns.index({mini_batch_indices}).detach();         // [MB]
-                auto mb_advantages = used_advantages.index({mini_batch_indices}).detach(); // [MB]
-                auto mb_log_probs  = log_probs.index({mini_batch_indices}).detach();       // [MB]
+                torch::Tensor mb_actions = actions.slice(0, start, end).detach();
 
-                torch::Tensor new_action, new_log_prob, entropy, new_value;
-                if (separate_nets) {
-                    auto res = policy_net->get_actions(mb_states, mb_action);
-
-                    new_action   = std::get<0>(res);
-                    new_log_prob = std::get<1>(res);
-                    entropy      = std::get<2>(res);
-
-                    // Get value from value network
-                    new_value = value_net->get_value(mb_states); // [MB, 1]
-                } else {
-                    auto res = actor_critic_net->get_actions(mb_states, mb_action);
-
-                    new_action   = std::get<0>(res);
-                    new_log_prob = std::get<1>(res);
-                    entropy      = std::get<2>(res);
-
-                    // This is an actor critic network so it returns value too
-                    new_value = std::get<3>(res); // [MB, 1]
+                // For categorical, actions must be int64
+                if (mb_actions.scalar_type() != torch::kLong) {
+                    mb_actions = mb_actions.to(torch::kLong);
                 }
 
-                new_log_prob.squeeze_(-1); // [MB]
-                entropy.squeeze_(-1);      // [MB]
-                new_value.squeeze_(-1);    // [MB]
+                auto res = actor_critic_net->get_actions(mb_states, std::make_tuple(h_state, c_state), mb_ep_start, mb_actions);
+
+                auto new_action   = std::get<0>(res).squeeze(-1); // [L]
+                auto new_log_prob = std::get<1>(res).squeeze(-1); // [L]
+                auto entropy      = std::get<2>(res).squeeze(-1); // [L]
+                auto new_value    = std::get<3>(res).squeeze(-1); // [L]
+                auto new_state    = std::get<4>(res);
+
+                h_state = std::get<0>(new_state);
+                c_state = std::get<1>(new_state);
 
                 auto log_ratio = new_log_prob - mb_log_probs; // [MB]
 
@@ -318,8 +308,9 @@ class PPO {
                     std::cout << "\033[31m>>>>>>>>>>>[DEBUG] log_ratio mean=" << lr_mean << " std=" << lr_std << " ratio min=" << ratio_min
                               << " max=" << ratio_max << std::endl;
 
-                    std::cout << "\033[31m>>>>>>>>>>>[DEBUG] mb_action dtype=" << mb_action.dtype() << " shape=" << mb_action.sizes()
+                    std::cout << "\033[31m>>>>>>>>>>>[DEBUG] mb_action dtype=" << mb_actions.dtype() << " shape=" << mb_actions.sizes()
                               << " mb_log_probs shape=" << mb_log_probs.sizes() << " new_log_prob shape=" << new_log_prob.sizes() << std::endl;
+                    start = false;
                 }
 
                 auto [clip_frac, approx_kl] = calculate_clip_fraction(log_ratio, ratio);
@@ -372,20 +363,9 @@ class PPO {
                 steps++;
 
                 if (steps % params_.grad_acc_steps == 0) {
-                    if (separate_nets) {
-                        torch::nn::utils::clip_grad_norm_(policy_net->parameters(), params_.max_grad_norm);
-                        torch::nn::utils::clip_grad_norm_(value_net->parameters(), params_.max_grad_norm);
-
-                        policy_optimizer->step();
-                        value_optimizer->step();
-
-                        value_optimizer->zero_grad();
-                        policy_optimizer->zero_grad();
-                    } else {
-                        torch::nn::utils::clip_grad_norm_(actor_critic_net->parameters(), params_.max_grad_norm);
-                        a2c_optimizer->step();
-                        a2c_optimizer->zero_grad();
-                    }
+                    torch::nn::utils::clip_grad_norm_(actor_critic_net->parameters(), params_.max_grad_norm);
+                    a2c_optimizer->step();
+                    a2c_optimizer->zero_grad();
                 }
 
                 mean_pg_loss += pg_loss.item<double>();
@@ -406,20 +386,9 @@ class PPO {
 
             // If there is any remaining updates that hasn't been done, flush it here!
             if (steps % params_.grad_acc_steps != 0) {
-                if (separate_nets) {
-                    torch::nn::utils::clip_grad_norm_(policy_net->parameters(), params_.max_grad_norm);
-                    torch::nn::utils::clip_grad_norm_(value_net->parameters(), params_.max_grad_norm);
-
-                    policy_optimizer->step();
-                    value_optimizer->step();
-
-                    policy_optimizer->zero_grad();
-                    value_optimizer->zero_grad();
-                } else {
-                    torch::nn::utils::clip_grad_norm_(actor_critic_net->parameters(), params_.max_grad_norm);
-                    a2c_optimizer->step();
-                    a2c_optimizer->zero_grad();
-                }
+                torch::nn::utils::clip_grad_norm_(actor_critic_net->parameters(), params_.max_grad_norm);
+                a2c_optimizer->step();
+                a2c_optimizer->zero_grad();
             }
 
             if (stop_updates) {
@@ -439,40 +408,48 @@ class PPO {
     {
         torch::NoGradGuard no_grad;
 
-        auto rewards     = tb.get_rewards().squeeze(-1); // [T]
-        auto dones       = tb.get_dones().squeeze(-1);   // [T]
-        auto values      = tb.get_values().squeeze(-1);  // [T]
-        auto next_states = tb.get_next_states();
+        auto rewards         = tb.get_rewards().squeeze(-1);    // [T]
+        auto dones           = tb.get_dones().squeeze(-1);      // [T]
+        auto values          = tb.get_values().squeeze(-1);     // [T]
+        auto terminates      = tb.get_terminates().squeeze(-1); // [T] true terminal
+        auto truncates       = tb.get_truncates().squeeze(-1);  // [T] time limit
+        auto next_states     = tb.get_next_states();
+        auto terminal_values = tb.get_terminal_values().squeeze(-1); // [T]  (add this)
 
         auto idx = next_states.size(0) - 1;
-        torch::Tensor next_value;
 
-        if (separate_nets) {
-            next_value = value_net->get_value(next_states.index({idx}).unsqueeze(0)).detach().squeeze(-1); // [1]
-        } else {
-            next_value = actor_critic_net->get_value(next_states.index({idx}).unsqueeze(0)).detach().squeeze(-1); // [1]
-        }
+        auto episode_start = torch::zeros({1}, rewards.options());
+        auto next_value =
+            actor_critic_net->get_value(next_states.index({idx}).unsqueeze(0), next_lstm_state_, episode_start).detach().squeeze(-1); // [1]
 
         int64_t T = rewards.size(0);
 
         torch::Tensor advantages = torch::zeros_like(values).unsqueeze(-1); // [T, 1]
         torch::Tensor last_gae   = torch::zeros_like(values[0]);            // [], just a value
 
-        for (int64_t t = params_.num_steps - 1; t >= 0; --t) {
-            // mask = 0 if done, 1 if not (shape [1,1])
-            auto mask = 1.0 - dones[t]; // [T]
+        for (int64_t t = T - 1; t >= 0; --t) {
+            auto gae_mask       = 1.0 - dones[t];      // [T]
+            auto bootstrap_mask = 1.0 - terminates[t]; // [T]
 
             // next value: either bootstrap or the next in values
             auto next_val = (t == T - 1 ? next_value : values[t + 1]); // [1]
 
+            // if the episode ended here:
+            // - terminate : stop here no bootstrapping
+            // - truncated: bootstrap from terminal_values[t]
+            if (dones[t].item<double>() > 0.5) {
+                next_val = torch::where(truncates[t] > 0.5, terminal_values[t], torch::zeros_like(next_val));
+            }
+
             // delta = r + γ * V(next) * mask - V(current)
-            auto delta = rewards[t] + params_.gamma * next_val * mask - values[t]; // [1]
+            auto delta = rewards[t] + params_.gamma * next_val * bootstrap_mask - values[t]; // [1]
 
             // GAE recurrence
-            last_gae = delta + params_.gamma * params_.gae_lambda * mask * last_gae; // [1]
+            last_gae = delta + params_.gamma * params_.gae_lambda * gae_mask * last_gae; // [1]
 
             advantages[t] = last_gae;
         }
+
         advantages.squeeze_(-1);            // [T]
         auto returns = advantages + values; // [T]
 
@@ -502,19 +479,13 @@ class PPO {
 
         for (size_t t = 0; t < params_.num_steps; ++t) {
             torch::Tensor action, log_prob, entropy, value;
-            if (separate_nets) {
-                auto res = policy_net->get_actions(state);
-                action   = std::get<0>(res);
-                log_prob = std::get<1>(res);
-                entropy  = std::get<2>(res);
-                value    = value_net->forward(state).flatten();
-            } else {
-                auto res = actor_critic_net->get_actions(state);
-                action   = std::get<0>(res);
-                log_prob = std::get<1>(res);
-                entropy  = std::get<2>(res);
-                value    = std::get<3>(res).flatten();
-            }
+
+            auto res         = actor_critic_net->get_actions(state, next_lstm_state_, next_done_);
+            action           = std::get<0>(res);
+            log_prob         = std::get<1>(res);
+            entropy          = std::get<2>(res);
+            value            = std::get<3>(res).flatten();
+            next_lstm_state_ = std::get<4>(res);
 
             auto [next_state, reward, done, terminated, truncated] = env.step(action.squeeze(0));
 
@@ -524,9 +495,19 @@ class PPO {
             auto scaled_reward = reward * params_.reward_sharper; // reward scaling
 
             auto reward_tensor     = torch::full({(int64_t)params_.num_envs}, scaled_reward, state.options());
-            auto done_tensor       = torch::full({(int64_t)params_.num_envs}, done ? 1.0 : 0.0, state.options());
+            next_done_             = torch::full({(int64_t)params_.num_envs}, done ? 1.0 : 0.0, state.options());
             auto terminated_tensor = torch::full({(int64_t)params_.num_envs}, terminated ? 1.0 : 0.0, state.options());
             auto truncated_tensor  = torch::full({(int64_t)params_.num_envs}, truncated ? 1.0 : 0.0, state.options());
+
+            episode_return += reward;
+
+            torch::Tensor terminal_value = torch::zeros({1}, state.options());
+
+            if (truncated && !terminated) {
+                auto episode_start0 = torch::zeros({1}, state.options());
+                terminal_value =
+                    actor_critic_net->get_value(tb_next_state.unsqueeze(0), next_lstm_state_, episode_start0).detach().squeeze(-1); // [1]
+            }
 
             // Add transition to buffer
             trajectory_buffer.add(tb_state,
@@ -534,14 +515,11 @@ class PPO {
                                   log_prob.squeeze(0),
                                   reward_tensor,
                                   tb_next_state,
-                                  done_tensor,
+                                  next_done_,
                                   terminated_tensor,
                                   truncated_tensor,
                                   value,
-                                  torch::zeros({1}, state.options()) // Terminal value for extra bootstrapping
-            );
-
-            episode_return += reward;
+                                  terminal_value);
 
             // If done: break early — end of episode
             if (done) {
@@ -564,16 +542,18 @@ class PPO {
         if (episode_return > max_return_) {
             best_checkpoint_episode = episode_index;
             max_return_             = episode_return;
-            save_networks("artifacts");
+            save_networks("artifacts_rnn");
 
             saved_checkpoints->push(episode_index);
-            remove_old_checkpoints("artifacts");
+            remove_old_checkpoints("artifacts_rnn");
         }
 
         if (current_episode_ % log_rate_ == 0) {
+            double avg_episode = (completed_episodes > 0) ? (completed_episode_returns / (double)completed_episodes) : 0.0;
+
             std::cout << "\033[31m>>>>>>>>>>>[ROLL OUT] return=" << episode_return << " sum_of_last_" << track_last_n << "=" << sum_of_last_n
-                      << "\nAVG Reward Per Episode : " << completed_episode_returns / (double)completed_episodes
-                      << "\nBest Period : " << max_return_rollout_return_ << " Best Run Result : " << max_return_ << std::endl;
+                      << "\nAVG Reward Per Episode : " << avg_episode << "\nBest Period : " << max_return_rollout_return_
+                      << " Best Run Result : " << max_return_ << std::endl;
         }
     }
 
@@ -582,9 +562,9 @@ class PPO {
         if (!params_.anneal_lr)
             return;
 
-        auto frac   = 1.0 - ((double)episode - 1.0) / max_episodes;
+        auto frac   = (double)episode / std::max<size_t>(1, max_episodes - 1);
         auto new_lr = frac * params_.learning_rate_policy;
-        new_lr      = std::max(params_.min_lr, new_lr);
+        new_lr      = std::max(params_.min_lr, frac * params_.learning_rate_policy);
 
         // Update optimizers with new learning rate
         if (separate_nets) {
@@ -609,26 +589,24 @@ class PPO {
 
     torch::Tensor act(torch::Tensor& state)
     {
-        // Get action from policy network
-        if (separate_nets) {
-            auto res = policy_net->get_actions(state);
-            return std::get<0>(res);
-        }
-
-        auto res = actor_critic_net->get_actions(state);
+        auto res         = actor_critic_net->get_actions(state, next_lstm_state_, next_done_);
+        next_lstm_state_ = std::get<4>(res);
         return std::get<0>(res);
     }
 
     void train(Env& env, size_t tb_count)
     {
         std::cout << "\033[32m>>>>>>>>>>> Training has started!" << std::endl;
-        for (size_t episode = 0; episode < params_.total_time_steps; ++episode) {
+        size_t num_updates = (params_.total_time_steps + params_.num_steps - 1) / params_.num_steps;
+        for (size_t update_episode = 0; update_episode < num_updates; ++update_episode) {
+            reset_rnn_states();
+
             if (current_episode_ % log_rate_ == 0) {
-                std::cout << "\033[33m>>>>>>>>>>> Episode : " << episode + 1 << std::endl;
-                anneal_lr(episode, params_.total_time_steps);
+                std::cout << "\033[33m>>>>>>>>>>> Episode : " << update_episode + 1 << std::endl;
+                anneal_lr(update_episode, num_updates);
             }
 
-            collect(env, episode);
+            collect(env, update_episode);
 
             if (tb_count > 1) {
                 auto trajectories = buffer->sample_tbs(tb_count);
@@ -665,9 +643,11 @@ class PPO {
 
         std::cout << "\033[32m>>>>>>>>>>> Playing the trained agent!" << std::endl;
 
+        reset_rnn_states();
+
         for (size_t t = 0; t < max_steps; ++t) {
-            auto action                           = act(state);
-            auto [next_state, reward, done, _, _] = env.step(action.squeeze(0));
+            auto action                                            = act(state);
+            auto [next_state, reward, done, terminated, truncated] = env.step(action.squeeze(0));
 
             state = next_state;
 
@@ -678,5 +658,5 @@ class PPO {
         }
     }
 
-    ~PPO() = default;
+    ~PPO_RNN() = default;
 };
