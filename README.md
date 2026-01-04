@@ -136,3 +136,24 @@ I had to use CMake because libtorch and vizdoom is crying for cmake.
 If I could avoid, I would but it would just make the process 10x longer.
 I am not a cmake master and I despise it to be very frank.
 Maybe one day I will port everything to NOB and be happy.
+
+
+## MAYBE IN THE FUTURE
+
+[ ] Model-based training
+
+[ ] Prioritized replay on segments instead of throwing everything. It is a waste just fyi.
+
+[ ] Robust Policy Optimization
+
+[ ] KL-Adaptive Learning rate and entropy scheduling
+
+[ ] Multiple Environments
+
+[ ] Multi-source inputs and structured outputs
+
+[ ] Action Masking
+
+[ ] Adaptive Reward Normalization.
+
+[ ] Using pre-trained vision encoders.
