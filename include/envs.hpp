@@ -99,7 +99,7 @@ class DoomENV : public Env {
         game_->setKillReward(10);
         // game_->setDamageTakenReward(-1);
         // game_->setHitReward(-10);
-        game_->setHitTakenPenalty(5);
+        game_->setHitTakenPenalty(1);
         // game_->setLivingReward(1);
 
         // Leaving this here if you want to do any reward engineering

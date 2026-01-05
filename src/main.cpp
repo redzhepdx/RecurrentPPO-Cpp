@@ -141,13 +141,12 @@ void train_ppo_rnn_run()
     params.num_steps            = 2048;
     params.ppo_epochs           = 10;
     params.num_minibatches      = 1;
-    params.learning_rate_policy = 3e-4;
-    params.learning_rate_critic = 1e-5;
-    params.ent_coef             = 0.01;
+    params.learning_rate_policy = 1e-5;
+    params.ent_coef             = 0.0;
     params.clip_epsilon         = 0.2;
     params.clip_vloss           = false;
     params.anneal_lr            = true;
-    params.reward_sharper       = 0.001;
+    params.reward_sharper       = 0.01;
     params.max_grad_norm        = 0.5;
     params.grad_acc_steps       = 4;
     bool separate_nets          = true;
@@ -202,6 +201,8 @@ void play_doom_ai_rnn_run()
 
             usleep(100000);
         }
+
+        ppo->reset_rnn_states();
 
         std::cout << "Episode Length : " << episode_length << std::endl;
         std::cout << "Total Reward: " << reward_sum << std::endl;
